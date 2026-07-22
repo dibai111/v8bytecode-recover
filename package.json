@@ -1,0 +1,35 @@
+{
+  "name": "v8blob-to-js",
+  "version": "0.4.1",
+  "description": "Recover structured, syntax-validated JavaScript from V8 cached bytecode.",
+  "type": "module",
+  "bin": {
+    "v8blob-to-js": "bin/v8blob-to-js.mjs",
+    "v8blob-benchmark": "bin/v8blob-benchmark.mjs",
+    "v8blob-profiles": "bin/v8blob-profiles.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "engine/v8asm/LICENSE",
+    "engine/v8asm/cached_data/",
+    "engine/v8asm/source_recovery/",
+    "v8blob-to-js.cmd"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "node --check bin/v8blob-to-js.mjs && node --check bin/v8blob-benchmark.mjs && node --check bin/v8blob-profiles.mjs",
+    "profiles:validate": "node bin/v8blob-profiles.mjs validate",
+    "profiles:list": "node bin/v8blob-profiles.mjs list"
+  },
+  "keywords": [
+    "v8",
+    "bytecode",
+    "source-recovery",
+    "jsc",
+    "reverse-engineering"
+  ],
+  "license": "MIT"
+}

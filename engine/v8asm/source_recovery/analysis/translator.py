@@ -1,0 +1,1358 @@
+"""Translate V8 instructions into JavaScript-like operations."""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Dict, List, Optional, Tuple
+
+from ..model import V8Address, V8ScopeInfo
+from ..model.bytecode import V8BytecodeArray
+
+from ..context import (
+    ConstantPoolEntry,
+    DecompilerContext,
+    JS_RESERVED_IDENTIFIERS,
+    js_binding_identifier,
+)
+from .instruction import Instruction
+from .utils import parse_jump_target
+
+CONST_INDEX_RE = re.compile(r"^\[(\-?\d+)\]$")
+RANGE_RE = re.compile(r"^([ra])(\d+)-([ra])(\d+)$")
+IDENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+TYPEOF_LITERAL_FLAGS = {
+    0: "number",
+    1: "string",
+    2: "symbol",
+    3: "boolean",
+    4: "bigint",
+    5: "undefined",
+    6: "function",
+    7: "object",
+    8: "other",
+}
+
+CONDITION_MAP: Dict[str, Tuple[str, bool]] = {
+    "JumpIfTrue": ("truthy(ACCU)", True),
+    "JumpIfFalse": ("truthy(ACCU)", False),
+    "JumpIfTrueConstant": ("truthy(ACCU)", True),
+    "JumpIfFalseConstant": ("truthy(ACCU)", False),
+    "JumpIfToBooleanTrue": ("truthy(ACCU)", True),
+    "JumpIfToBooleanFalse": ("truthy(ACCU)", False),
+    "JumpIfToBooleanTrueConstant": ("truthy(ACCU)", True),
+    "JumpIfToBooleanFalseConstant": ("truthy(ACCU)", False),
+    "JumpIfUndefinedOrNull": ("isNullish(ACCU)", True),
+    "JumpIfUndefinedOrNullConstant": ("isNullish(ACCU)", True),
+    "JumpIfUndefined": ("ACCU === undefined", True),
+    "JumpIfUndefinedConstant": ("ACCU === undefined", True),
+    "JumpIfNotUndefined": ("ACCU !== undefined", True),
+    "JumpIfNotUndefinedConstant": ("ACCU !== undefined", True),
+    "JumpIfNull": ("ACCU === null", True),
+    "JumpIfNotNull": ("ACCU !== null", True),
+    "JumpIfNullConstant": ("ACCU === null", True),
+    "JumpIfNotNullConstant": ("ACCU !== null", True),
+    "JumpIfJSReceiver": ("isJSReceiver(ACCU)", True),
+    "JumpIfJSReceiverConstant": ("isJSReceiver(ACCU)", True),
+}
+
+
+def _parse_bracket_number(token: str) -> Optional[int]:
+    m = CONST_INDEX_RE.match(token.strip())
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _parse_number_token(token: str) -> Optional[int]:
+    token = token.strip()
+    bracket = _parse_bracket_number(token)
+    if bracket is not None:
+        return bracket
+    if token.startswith("#") and token[1:].isdigit():
+        return int(token[1:])
+    if token.isdigit():
+        return int(token)
+    return None
+
+
+class InstructionTranslator:
+    def __init__(self, context: DecompilerContext, bytecode: V8BytecodeArray):
+        self.context = context
+        self.bytecode = bytecode
+        owner = context.get_function_for_bytecode(bytecode)
+        self.active_function_name = (
+            context.get_function_name(owner)
+            if owner is not None
+            else f"bytecode_{bytecode.address:012x}"
+        )
+        instructions = [
+            Instruction.from_codeline(raw) for raw in bytecode.instructions
+        ]
+        self.uses_derived_receiver = any(
+            instr.mnemonic == "Mov"
+            and len(instr.args) >= 2
+            and instr.args[1].strip() == "<this>"
+            for instr in instructions
+        )
+        self.super_constructor_registers = {
+            self._reg_name(instr.args[0])
+            for instr in instructions
+            if instr.mnemonic == "GetSuperConstructor" and instr.args
+        }
+        self.is_async_generator = any(
+            instr.mnemonic == "InvokeIntrinsic"
+            and instr.args
+            and instr.args[0].strip("[]").startswith("AsyncGenerator")
+            for instr in instructions
+        )
+        self.constants: Dict[int, ConstantPoolEntry] = {
+            entry.index: entry for entry in context.constant_pool_entries(bytecode)
+        }
+        self.context_slot_names: Dict[Tuple[int, int], str] = {}
+        self._infer_context_slot_names()
+        self.context_chains_at_offset: Dict[
+            int, List[Optional[V8ScopeInfo]]
+        ] = {}
+        self.register_context_chains_at_offset: Dict[
+            int, Dict[str, List[Optional[V8ScopeInfo]]]
+        ] = {}
+        self._infer_context_chains()
+
+    def _scope_from_constant_operand(self, operand: str) -> Optional[V8ScopeInfo]:
+        index = _parse_bracket_number(operand)
+        entry = self.constants.get(index) if index is not None else None
+        if not entry or not isinstance(entry.raw, V8Address):
+            return None
+        target = self.context.get_object(entry.raw.address)
+        return target if isinstance(target, V8ScopeInfo) else None
+
+    @staticmethod
+    def _star_register(instr: Instruction) -> Optional[str]:
+        if instr.mnemonic.startswith("Star") and instr.mnemonic[4:].isdigit():
+            return f"r{int(instr.mnemonic[4:])}"
+        if instr.mnemonic == "Star" and instr.args:
+            return instr.args[0].strip().strip("<>")
+        return None
+
+    def _infer_context_chains(self) -> None:
+        current_chain = list(
+            self.context.captured_scopes.get(self.bytecode.address, [])
+        )
+        accumulator_chain: Optional[List[Optional[V8ScopeInfo]]] = None
+        register_chains: Dict[str, List[Optional[V8ScopeInfo]]] = {}
+
+        for raw in self.bytecode.instructions:
+            instr = Instruction.from_codeline(raw)
+            self.context_chains_at_offset[instr.offset] = list(current_chain)
+            self.register_context_chains_at_offset[instr.offset] = {
+                name: list(chain) for name, chain in register_chains.items()
+            }
+
+            if instr.mnemonic in {"CreateFunctionContext", "CreateBlockContext"}:
+                scope = self._scope_from_constant_operand(
+                    instr.args[0] if instr.args else ""
+                )
+                accumulator_chain = [scope] + current_chain if scope else None
+                continue
+
+            if instr.mnemonic == "CreateCatchContext":
+                operand = instr.args[1] if len(instr.args) > 1 else ""
+                scope = self._scope_from_constant_operand(operand)
+                accumulator_chain = [scope] + current_chain if scope else None
+                continue
+
+            star_register = self._star_register(instr)
+            if star_register:
+                if accumulator_chain is not None:
+                    register_chains[star_register] = list(accumulator_chain)
+                else:
+                    register_chains.pop(star_register, None)
+                continue
+
+            if instr.mnemonic == "Ldar" and instr.args:
+                source = self._reg_name(instr.args[0])
+                source_chain = register_chains.get(source)
+                accumulator_chain = list(source_chain) if source_chain else None
+                continue
+
+            if instr.mnemonic == "Mov" and len(instr.args) >= 2:
+                source = self._reg_name(instr.args[0])
+                target = self._reg_name(instr.args[1])
+                source_chain = register_chains.get(source)
+                if source_chain:
+                    register_chains[target] = list(source_chain)
+                else:
+                    register_chains.pop(target, None)
+                continue
+
+            if instr.mnemonic == "PushContext":
+                destination = self._reg_name(instr.args[0]) if instr.args else "context"
+                register_chains[destination] = list(current_chain)
+                if accumulator_chain is not None:
+                    current_chain = list(accumulator_chain)
+                continue
+
+            if instr.mnemonic == "PopContext":
+                source = self._reg_name(instr.args[0]) if instr.args else "context"
+                saved_chain = register_chains.get(source)
+                current_chain = (
+                    list(saved_chain) if saved_chain is not None else current_chain[1:]
+                )
+                accumulator_chain = None
+                continue
+
+            accumulator_chain = None
+
+    def _record_context_slot_name(self, slot: int, depth: int, name: str) -> None:
+        if not IDENT_RE.match(name) or name in JS_RESERVED_IDENTIFIERS:
+            return
+        key = (slot, depth)
+        previous = self.context_slot_names.get(key)
+        if previous is None or previous == name:
+            self.context_slot_names[key] = name
+        else:
+            self.context_slot_names.pop(key, None)
+
+    def _infer_context_slot_names(self) -> None:
+        for entry in self.constants.values():
+            if not isinstance(entry.raw, V8Address):
+                continue
+            target = self.context.get_object(entry.raw.address)
+            if not isinstance(target, V8ScopeInfo):
+                continue
+            for index in range(len(target.context_slots)):
+                name = self.context.scope_context_name(entry.raw, index)
+                if name:
+                    self._record_context_slot_name(index + 2, 0, name)
+
+        instructions = [
+            Instruction.from_codeline(raw) for raw in self.bytecode.instructions
+        ]
+        current_mnemonics = {
+            "LdaImmutableCurrentContextSlot",
+            "LdaCurrentContextSlot",
+            "LdaCurrentScriptContextSlot",
+        }
+        outer_mnemonics = {"LdaImmutableContextSlot", "LdaContextSlot"}
+        for current, following in zip(instructions, instructions[1:]):
+            if following.mnemonic != "ThrowReferenceErrorIfHole" or not following.args:
+                continue
+            constant_index = _parse_bracket_number(following.args[0])
+            if constant_index is None:
+                continue
+            name = self._identifier_from_literal(self._const(constant_index))
+            if not name:
+                continue
+            if current.mnemonic in current_mnemonics and current.args:
+                slot = _parse_bracket_number(current.args[0])
+                if slot is not None:
+                    self._record_context_slot_name(slot, 0, name)
+            elif current.mnemonic in outer_mnemonics and len(current.args) >= 3:
+                slot = _parse_number_token(current.args[1])
+                depth = _parse_number_token(current.args[2])
+                if slot is not None and depth is not None:
+                    self._record_context_slot_name(slot, depth, name)
+
+    def _scope_name_at_offset(
+        self,
+        instr: Instruction,
+        slot: int,
+        depth: int,
+        context_register: Optional[str] = None,
+    ) -> tuple[bool, Optional[str]]:
+        if context_register is None or context_register in {"context", "<context>"}:
+            chain = self.context_chains_at_offset.get(instr.offset)
+        else:
+            registers = self.register_context_chains_at_offset.get(instr.offset, {})
+            chain = registers.get(self._reg_name(context_register))
+        if chain is None or depth < 0 or depth >= len(chain):
+            return False, None
+        scope = chain[depth]
+        if not isinstance(scope, V8ScopeInfo):
+            return False, None
+        index = slot - 2
+        fallback = f"scope_{scope.address:012x}_{index}"
+        if index < 0 or index >= len(scope.context_slots):
+            # Some serializer profiles expose the ScopeInfo local count but not
+            # its trailing name array. In that case retain the exact
+            # ThrowReferenceErrorIfHole/name evidence inferred for this bytecode.
+            hinted = self.context.scope_context_name(
+                V8Address(scope.address), index
+            )
+            return True, js_binding_identifier(hinted, fallback)
+        name = self.context.scope_context_name(V8Address(scope.address), index)
+        if name:
+            return True, js_binding_identifier(name, fallback)
+        if str(scope.scope_type) in {"5", "CATCH_SCOPE"}:
+            return False, None
+        return True, fallback
+
+    def _context_slot_name(
+        self,
+        slot: int,
+        depth: int = 0,
+        instr: Optional[Instruction] = None,
+        context_register: Optional[str] = None,
+    ) -> Optional[str]:
+        if instr is not None:
+            scope_known, name = self._scope_name_at_offset(
+                instr, slot, depth, context_register
+            )
+            if name:
+                return name
+            if scope_known:
+                return self.context_slot_names.get((slot, depth))
+        candidates = (
+            self.context_slot_names.get((slot, depth)),
+            self.context.captured_context_slot_name(self.bytecode, slot, depth),
+            self.context.unique_context_slot_name(slot),
+        )
+        for candidate in candidates:
+            if (
+                candidate
+                and IDENT_RE.match(candidate)
+                and candidate not in JS_RESERVED_IDENTIFIERS
+            ):
+                return candidate
+        captured = self.context.captured_scopes.get(self.bytecode.address, [])
+        if 0 <= depth < len(captured) and isinstance(captured[depth], V8ScopeInfo):
+            scope = captured[depth]
+            return f"scope_{scope.address:012x}_{slot - 2}"
+        return None
+
+    def translate(self, instr: Instruction) -> str:
+        handler = getattr(self, f"_op_{instr.mnemonic}", None)
+        if handler:
+            return handler(instr)
+
+        if instr.mnemonic.startswith("Star") and instr.mnemonic[4:].isdigit():
+            reg_id = int(instr.mnemonic[4:])
+            return f"{self._reg_name(f'r{reg_id}')} = ACCU"
+
+        if instr.mnemonic == "Star" and instr.args:
+            return f"{self._reg_name(instr.args[0])} = ACCU"
+
+        if instr.mnemonic.startswith("Ldar") and instr.mnemonic[4:].isdigit():
+            reg_id = int(instr.mnemonic[4:])
+            return f"ACCU = {self._reg_name(f'r{reg_id}')}"
+
+        return f"// {instr.raw_line.strip()}"
+
+    def branch_condition(self, instr: Instruction) -> Optional[Tuple[str, bool]]:
+        if instr.mnemonic in {"JumpIfForInDone", "JumpIfForInDoneConstant"}:
+            index = self._reg_name(instr.args[1]) if len(instr.args) > 1 else "index"
+            cache = self._reg_name(instr.args[2]) if len(instr.args) > 2 else "cache"
+            return (f"ForInDone({index}, {cache})", True)
+        info = CONDITION_MAP.get(instr.mnemonic)
+        if not info:
+            return None
+        return info
+
+    def fallthrough_condition(self, instr: Instruction) -> Optional[str]:
+        info = self.branch_condition(instr)
+        if not info:
+            return None
+        expr, branch_on_true = info
+        if branch_on_true:
+            return f"!({expr})"
+        return expr
+
+    def _const(self, idx: int) -> str:
+        entry = self.constants.get(idx)
+        if entry:
+            return self._display_to_expr(entry.display)
+        return f"Const[{idx}]"
+
+    def _const_token(self, token: str) -> str:
+        idx = _parse_bracket_number(token)
+        if idx is None:
+            return token
+        return self._const(idx)
+
+    def _reg_name(self, token: str) -> str:
+        token = token.strip()
+        if token.startswith("<") and token.endswith(">"):
+            inner = token.strip("<>")
+            if not inner:
+                return token
+            if inner == "this" and self.uses_derived_receiver:
+                return "derived_this"
+            if inner == "closure":
+                return self.active_function_name
+            return inner.replace(" ", "_")
+        if token.startswith("a") and token[1:].isdigit():
+            return f"arg{int(token[1:])}"
+        if token.startswith("r") and token[1:].isdigit():
+            return token
+        if token.startswith("CASE_"):
+            return token
+        return token
+
+    def _identifier_from_literal(self, token: str) -> Optional[str]:
+        token = token.strip()
+        if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+            return None
+        try:
+            value = json.loads(token)
+        except json.JSONDecodeError:
+            return None
+        if IDENT_RE.match(value):
+            return value
+        return None
+
+    def _sanitize_identifier(self, token: str) -> Optional[str]:
+        cleaned = re.sub(r"[^A-Za-z0-9_$]", "_", token.strip())
+        cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+        if not cleaned:
+            return None
+        if cleaned[0].isdigit():
+            cleaned = f"fn_{cleaned}"
+        if IDENT_RE.match(cleaned):
+            return cleaned
+        return None
+
+    def _display_to_expr(self, display: str) -> str:
+        token = display.strip()
+        if not token:
+            return "undefined"
+        if token[0] in ('"', "'"):
+            return token
+        if token[0] in "[{":
+            return token
+        if token in {"true", "false", "null", "undefined", "HOLE"}:
+            return token
+        if re.fullmatch(
+            r"[+-]?(?:(?:\d+\.?\d*|\d*\.\d+)(?:[eE][+-]?\d+)?|Infinity|NaN)",
+            token,
+        ):
+            return token
+        if IDENT_RE.match(token):
+            return token
+        sanitized = self._sanitize_identifier(token)
+        if sanitized:
+            return sanitized
+        return json.dumps(token)
+
+    def _format_property_access(self, obj_token: str, prop_token: str) -> str:
+        obj = self._reg_name(obj_token)
+        prop = self._const_token(prop_token)
+        ident = self._identifier_from_literal(prop)
+        if ident:
+            return f"{obj}.{ident}"
+        return f"{obj}[{prop}]"
+
+    def _format_global_access(self, token: str) -> str:
+        name = self._const_token(token)
+        ident = self._identifier_from_literal(name)
+        if ident:
+            return ident
+        return f"globalThis[{name}]"
+
+    def _format_context_slot(
+        self, instr: Instruction, context: str, slot: str, depth: str
+    ) -> str:
+        context_expr = self._reg_name(context)
+        slot_expr = self._imm(slot, slot)
+        depth_expr = self._imm(depth, depth)
+        try:
+            name = self._context_slot_name(
+                int(slot_expr), int(depth_expr), instr, context
+            )
+        except ValueError:
+            name = None
+        if name:
+            return name
+        return f"get_context_slot({context_expr}, {slot_expr}, {depth_expr})"
+
+    def _expand_range(self, token: str) -> List[str]:
+        token = token.strip()
+        if re.fullmatch(r"[ra]\d+-[ra]-1", token):
+            return []
+        special = re.fullmatch(r"(<[^>]+>)-\1", token)
+        if special:
+            return [self._reg_name(special.group(1))]
+        match = RANGE_RE.match(token)
+        if not match:
+            return [self._reg_name(token)]
+        prefix, start, prefix2, end = match.groups()
+        if prefix != prefix2:
+            return [self._reg_name(token)]
+        start_idx, end_idx = int(start), int(end)
+        step = 1 if end_idx >= start_idx else -1
+        result = []
+        for i in range(start_idx, end_idx + step, step):
+            result.append(self._reg_name(f"{prefix}{i}"))
+        return result
+
+    def _drop_feedback(self, args: List[str], expected: int) -> List[str]:
+        if len(args) >= expected and _parse_bracket_number(args[-1]) is not None:
+            return args[:-1]
+        return args
+
+    def _format_call(self, callee: str, args: List[str]) -> str:
+        arg_text = ", ".join(self._reg_name(arg) for arg in args)
+        return f"ACCU = {self._reg_name(callee)}({arg_text})"
+
+    def _format_spread_args(self, args: List[str]) -> List[str]:
+        if not args:
+            return []
+        fixed = [self._reg_name(arg) for arg in args[:-1]]
+        return fixed + [f"...{self._reg_name(args[-1])}"]
+
+    def _imm(self, token: str, fallback: str = "?") -> str:
+        value = _parse_bracket_number(token)
+        if value is None:
+            return fallback if token is None else token
+        return str(value)
+
+    def _op_LdaConstant(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = Const[?]"
+        idx = _parse_bracket_number(instr.args[0])
+        if idx is None:
+            return f"ACCU = {instr.args[0]}"
+        return f"ACCU = {self._const(idx)}"
+
+    def _op_CreateArrayLiteral(self, instr: Instruction) -> str:
+        if len(instr.args) < 1:
+            return "ACCU = create_array_literal(?)"
+        const_repr = self._const_token(instr.args[0])
+        depth = instr.args[1] if len(instr.args) > 1 else "[0]"
+        flags = instr.args[2] if len(instr.args) > 2 else "#0"
+        if const_repr.startswith("["):
+            return f"ACCU = {const_repr}"
+        return f"ACCU = create_array_literal({const_repr}) /* depth={depth}, flags={flags} */"
+
+    def _op_CreateEmptyArrayLiteral(self, instr: Instruction) -> str:
+        return "ACCU = []"
+
+    def _op_CreateArrayFromIterable(self, instr: Instruction) -> str:
+        return "ACCU = Array.from(ACCU)"
+
+    def _op_CreateObjectLiteral(self, instr: Instruction) -> str:
+        if len(instr.args) < 1:
+            return "ACCU = create_object_literal({})"
+        const_repr = self._const_token(instr.args[0])
+        flags = self._imm(instr.args[1], "[0]") if len(instr.args) > 1 else "0"
+        slot = instr.args[2] if len(instr.args) > 2 else "#0"
+        if const_repr.startswith("{"):
+            return f"ACCU = {const_repr}"
+        return f"ACCU = create_object_literal({const_repr}) /* flags={flags}, slot={slot} */"
+
+    def _op_CreateEmptyObjectLiteral(self, instr: Instruction) -> str:
+        return "ACCU = {}"
+
+    def _op_CreateRegExpLiteral(self, instr: Instruction) -> str:
+        if len(instr.args) < 1:
+            return "ACCU = new RegExp(\"\")"
+        pattern = self._const_token(instr.args[0])
+        flags_value = _parse_number_token(instr.args[2]) if len(instr.args) > 2 else None
+        flags = self._regexp_flags(flags_value)
+        return f"ACCU = new RegExp({pattern}, {json.dumps(flags)})"
+
+    def _op_CreateRestParameter(self, instr: Instruction) -> str:
+        user_param_count = max(0, (self.bytecode.parameter_count or 1) - 1)
+        return f"ACCU = Array.prototype.slice.call(arguments, {user_param_count})"
+
+    def _op_CreateMappedArguments(self, instr: Instruction) -> str:
+        return "ACCU = arguments"
+
+    def _op_CreateUnmappedArguments(self, instr: Instruction) -> str:
+        return "ACCU = arguments"
+
+    def _op_CreateBlockContext(self, instr: Instruction) -> str:
+        scope = self._const_token(instr.args[0]) if instr.args else "<ScopeInfo>"
+        return f"ACCU = create_block_context({scope})"
+
+    def _op_LdaGlobal(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = globalThis[undefined]"
+        return f"ACCU = {self._format_global_access(instr.args[0])}"
+
+    def _op_LdaGlobalInsideTypeof(self, instr: Instruction) -> str:
+        return self._op_LdaGlobal(instr)
+
+    def _op_LdaGlobalNoFeedback(self, instr: Instruction) -> str:
+        return self._op_LdaGlobal(instr)
+
+    def _op_LdaImmutableCurrentContextSlot(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = context_slot[?]"
+        idx = _parse_bracket_number(instr.args[0]) or 0
+        name = self._context_slot_name(idx, instr=instr)
+        if name:
+            return f"ACCU = {name}"
+        return f"ACCU = context_slot[{idx}]"
+
+    def _op_LdaCurrentContextSlot(self, instr: Instruction) -> str:
+        return self._op_LdaImmutableCurrentContextSlot(instr)
+
+    def _op_LdaImmutableContextSlot(self, instr: Instruction) -> str:
+        if len(instr.args) >= 3:
+            return f"ACCU = {self._format_context_slot(instr, *instr.args[:3])}"
+        return self._op_LdaImmutableCurrentContextSlot(instr)
+
+    def _op_LdaContextSlot(self, instr: Instruction) -> str:
+        return self._op_LdaImmutableContextSlot(instr)
+
+    def _op_LdaCurrentScriptContextSlot(self, instr: Instruction) -> str:
+        return self._op_LdaImmutableCurrentContextSlot(instr)
+
+    def _op_LdaZero(self, instr: Instruction) -> str:
+        return "ACCU = 0"
+
+    def _op_LdaUndefined(self, instr: Instruction) -> str:
+        return "ACCU = undefined"
+
+    def _op_LdaTrue(self, instr: Instruction) -> str:
+        return "ACCU = true"
+
+    def _op_LdaFalse(self, instr: Instruction) -> str:
+        return "ACCU = false"
+
+    def _op_LdaNull(self, instr: Instruction) -> str:
+        return "ACCU = null"
+
+    def _op_LdaTheHole(self, instr: Instruction) -> str:
+        return "ACCU = HOLE"
+
+    def _op_LdaSmi(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = 0"
+        val = _parse_bracket_number(instr.args[0])
+        return f"ACCU = {val if val is not None else instr.args[0]}"
+
+    def _op_Ldar(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = ACCU"
+        return f"ACCU = {self._reg_name(instr.args[0])}"
+
+    def _op_StaCurrentScriptContextSlot(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "script_context[?] = ACCU"
+        idx = _parse_bracket_number(instr.args[0]) or 0
+        name = self._context_slot_name(idx, instr=instr)
+        if name:
+            return f"{name} = ACCU"
+        return f"script_context[{idx}] = ACCU"
+
+    def _op_StaCurrentContextSlot(self, instr: Instruction) -> str:
+        return self._op_StaCurrentScriptContextSlot(instr)
+
+    def _op_StaContextSlot(self, instr: Instruction) -> str:
+        if len(instr.args) >= 3:
+            context = self._reg_name(instr.args[0])
+            slot = self._imm(instr.args[1], instr.args[1])
+            depth = self._imm(instr.args[2], instr.args[2])
+            try:
+                name = self._context_slot_name(
+                    int(slot), int(depth), instr, instr.args[0]
+                )
+            except ValueError:
+                name = None
+            if name:
+                return f"{name} = ACCU"
+            return f"set_context_slot({context}, {slot}, {depth}, ACCU)"
+        return self._op_StaCurrentScriptContextSlot(instr)
+
+    def _op_StaGlobal(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "globalThis[?] = ACCU"
+        target = self._format_global_access(instr.args[0])
+        return f"{target} = ACCU"
+
+    def _op_GetNamedProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 2)
+        if len(args) < 2:
+            return "ACCU = <named-property>"
+        return f"ACCU = {self._format_property_access(args[0], args[1])}"
+
+    def _op_GetKeyedProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 2)
+        if not args:
+            return "ACCU = <keyed-property>"
+        receiver = self._reg_name(args[0])
+        return f"ACCU = {receiver}[ACCU]"
+
+    def _op_SetNamedProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "<named-property> = ACCU"
+        return f"{self._format_property_access(args[0], args[1])} = ACCU"
+
+    def _op_SetKeyedProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "<keyed-property> = ACCU"
+        receiver = self._reg_name(args[0])
+        key = self._reg_name(args[1])
+        return f"{receiver}[{key}] = ACCU"
+
+    def _op_DefineNamedOwnProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "<own-property> = ACCU"
+        return f"{self._format_property_access(args[0], args[1])} = ACCU"
+
+    def _op_DefineKeyedOwnProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 4)
+        if len(args) < 2:
+            return "<own-keyed-property> = ACCU"
+        receiver = self._reg_name(args[0])
+        key = self._reg_name(args[1])
+        return f"{receiver}[{key}] = ACCU"
+
+    def _op_DefineKeyedOwnPropertyInLiteral(self, instr: Instruction) -> str:
+        return self._op_DefineKeyedOwnProperty(instr)
+
+    def _op_StaInArrayLiteral(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "<array-literal>[?] = ACCU"
+        receiver = self._reg_name(args[0])
+        index = self._reg_name(args[1])
+        return f"{receiver}[{index}] = ACCU"
+
+    def _op_GetIterator(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = undefined[Symbol.iterator]()"
+        source = self._reg_name(instr.args[0])
+        return f"ACCU = {source}[Symbol.iterator]()"
+
+    def _op_CallRuntime(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = CallRuntime(?)"
+        runtime_name = instr.args[0].strip("[]")
+        arg_regs: List[str] = []
+        if len(instr.args) > 1:
+            arg_regs = self._expand_range(instr.args[1])
+        arg_text = ", ".join(arg_regs)
+        if runtime_name in {
+            "ThrowIteratorResultNotAnObject",
+            "ThrowSymbolIteratorInvalid",
+            "ThrowSymbolAsyncIteratorInvalid",
+        }:
+            return "throw new TypeError()"
+        if runtime_name == "DefineAccessorPropertyUnchecked" and len(arg_regs) >= 5:
+            target, key, getter, setter, attributes = arg_regs[:5]
+            return (
+                f"ACCU = Object.defineProperty({target}, {key}, {{ "
+                f"get: {getter} == null ? undefined : {getter}, "
+                f"set: {setter} == null ? undefined : {setter}, "
+                f"enumerable: !(({attributes}) & 2), "
+                f"configurable: !(({attributes}) & 4) }})"
+            )
+        return f"ACCU = {runtime_name}({arg_text})"
+
+    def _op_InvokeIntrinsic(self, instr: Instruction) -> str:
+        intrinsic = instr.args[0].strip("[]") if instr.args else ""
+        registers = (
+            self._expand_range(instr.args[1]) if len(instr.args) > 1 else []
+        )
+        if intrinsic == "CreateJSGeneratorObject":
+            return ""
+        if intrinsic == "AsyncGeneratorAwaitUncaught":
+            value = registers[1] if len(registers) > 1 else "undefined"
+            return f"ACCU = await {value}"
+        if intrinsic == "AsyncGeneratorYield":
+            value = registers[1] if len(registers) > 1 else "undefined"
+            return f"ACCU = yield {value}"
+        if intrinsic == "AsyncGeneratorResolve":
+            value = registers[1] if len(registers) > 1 else "undefined"
+            return f"ACCU = {value}"
+        if intrinsic == "AsyncGeneratorReject":
+            reason = registers[1] if len(registers) > 1 else "undefined"
+            return f"throw {reason}"
+        if intrinsic == "GeneratorClose":
+            return ""
+        return self._op_CallRuntime(instr)
+
+    def _op_CallUndefinedReceiver0(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 2)
+        callee = self._reg_name(args[0]) if args else "func"
+        return f"ACCU = {callee}()"
+
+    def _op_CallUndefinedReceiver1(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "ACCU = call(undefined, ?)"
+        callee = self._reg_name(args[0])
+        arg = self._reg_name(args[1])
+        return f"ACCU = {callee}({arg})"
+
+    def _op_CallUndefinedReceiver2(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 4)
+        if len(args) < 3:
+            return "ACCU = call(undefined, ?, ?)"
+        callee = self._reg_name(args[0])
+        arg1 = self._reg_name(args[1])
+        arg2 = self._reg_name(args[2])
+        return f"ACCU = {callee}({arg1}, {arg2})"
+
+    def _op_CallUndefinedReceiver(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if not args:
+            return "ACCU = call(undefined)"
+        callee = self._reg_name(args[0])
+        call_args = self._expand_range(args[1]) if len(args) > 1 else []
+        return self._format_call(callee, call_args)
+
+    def _op_CallWithSpread(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if not args:
+            return "ACCU = callWithSpread(?)"
+        callee = self._reg_name(args[0])
+        call_args = self._expand_range(args[1]) if len(args) > 1 else []
+        receiver = call_args[0] if call_args else "undefined"
+        spread_args = self._format_spread_args(call_args[1:])
+        arg_text = ", ".join(spread_args)
+        if receiver == "undefined":
+            return f"ACCU = {callee}({arg_text})"
+        method_args = ", ".join([receiver] + spread_args)
+        return f"ACCU = {callee}.call({method_args})"
+
+    def _op_CallProperty0(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "ACCU = callProperty(?, receiver=?)"
+        callee = self._reg_name(args[0])
+        receiver = self._reg_name(args[1])
+        return f"ACCU = {callee}.call({receiver})"
+
+    def _op_CallProperty2(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 5)
+        if len(args) < 4:
+            return "ACCU = callProperty(?, receiver=?, ...)"
+        callee = self._reg_name(args[0])
+        receiver = self._reg_name(args[1])
+        arg1 = self._reg_name(args[2])
+        arg2 = self._reg_name(args[3])
+        return f"ACCU = {callee}.call({receiver}, {arg1}, {arg2})"
+
+    def _op_CallProperty1(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 4)
+        if len(args) < 3:
+            return "ACCU = callProperty(?, receiver=?, ?)"
+        callee = self._reg_name(args[0])
+        receiver = self._reg_name(args[1])
+        arg1 = self._reg_name(args[2])
+        return f"ACCU = {callee}.call({receiver}, {arg1})"
+
+    def _op_CallProperty(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if len(args) < 2:
+            return "ACCU = callProperty(?, receiver=?)"
+        callee = self._reg_name(args[0])
+        call_args = self._expand_range(args[1])
+        receiver = call_args[0] if call_args else "undefined"
+        arg_text = ", ".join([receiver] + call_args[1:])
+        return f"ACCU = {callee}.call({arg_text})"
+
+    def _op_CallAnyReceiver(self, instr: Instruction) -> str:
+        return self._op_CallProperty(instr)
+
+    def _op_CloneObject(self, instr: Instruction) -> str:
+        source = self._reg_name(instr.args[0]) if instr.args else "ACCU"
+        flags = instr.args[1] if len(instr.args) > 1 else "#0"
+        return f"ACCU = ({{ ...{source} }}) /* flags={flags} */"
+
+    def _op_Construct(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if not args:
+            return "ACCU = new <constructor>()"
+        callee = self._reg_name(args[0])
+        call_args = self._expand_range(args[1]) if len(args) > 1 else []
+        arg_text = ", ".join(call_args)
+        if callee in self.super_constructor_registers:
+            return (
+                f"ACCU = Reflect.construct({callee}, [{arg_text}], new.target)"
+            )
+        return f"ACCU = new {callee}({arg_text})"
+
+    def _op_ConstructWithSpread(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 3)
+        if not args:
+            return "ACCU = new <constructor>(...?)"
+        callee = self._reg_name(args[0])
+        call_args = self._expand_range(args[1]) if len(args) > 1 else []
+        arg_text = ", ".join(self._format_spread_args(call_args))
+        return f"ACCU = new {callee}({arg_text})"
+
+    def _op_Add(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = ACCU + ?"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} + ACCU)"
+
+    def _op_AddSmi(self, instr: Instruction) -> str:
+        value = _parse_bracket_number(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU + {value})"
+
+    def _op_Inc(self, instr: Instruction) -> str:
+        return "ACCU = (ACCU + 1)"
+
+    def _op_Dec(self, instr: Instruction) -> str:
+        return "ACCU = (ACCU - 1)"
+
+    def _op_Sub(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? - ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} - ACCU)"
+
+    def _op_SubSmi(self, instr: Instruction) -> str:
+        value = _parse_bracket_number(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU - {value})"
+
+    def _op_Mul(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? * ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} * ACCU)"
+
+    def _op_MulSmi(self, instr: Instruction) -> str:
+        value = _parse_bracket_number(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU * {value})"
+
+    def _op_ExpSmi(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 2)
+        value = _parse_bracket_number(args[0]) if args else None
+        return f"ACCU = ({value} ** ACCU)"
+
+    def _op_BitwiseOr(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? | ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} | ACCU)"
+
+    def _op_BitwiseOrSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU | {value})"
+
+    def _op_BitwiseAnd(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? & ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} & ACCU)"
+
+    def _op_BitwiseAndSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU & {value})"
+
+    def _op_BitwiseNot(self, instr: Instruction) -> str:
+        return "ACCU = ~ACCU"
+
+    def _op_ShiftLeft(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? << ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} << ACCU)"
+
+    def _op_ShiftLeftSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU << {value})"
+
+    def _op_ShiftRight(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? >> ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} >> ACCU)"
+
+    def _op_ShiftRightSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU >> {value})"
+
+    def _op_Div(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? / ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} / ACCU)"
+
+    def _op_DivSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU / {value})"
+
+    def _op_Mod(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? % ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} % ACCU)"
+
+    def _op_ModSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU % {value})"
+
+    def _op_Mov(self, instr: Instruction) -> str:
+        if len(instr.args) < 2:
+            return "ACCU = ACCU"
+        src = self._reg_name(instr.args[0])
+        dest = self._reg_name(instr.args[1])
+        return f"{dest} = {src}"
+
+    def _op_Return(self, instr: Instruction) -> str:
+        return "return ACCU"
+
+    def _op_Jump(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "// jump ?"
+        return f"goto offset_{target}"
+
+    def _op_JumpLoop(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "// jump_loop ?"
+        return f"loop goto offset_{target}"
+
+    def _op_JumpIfToBooleanTrue(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU) goto ?"
+        return f"if (truthy(ACCU)) goto offset_{target}"
+
+    def _op_JumpIfToBooleanFalse(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (!ACCU) goto ?"
+        return f"if (!truthy(ACCU)) goto offset_{target}"
+
+    def _op_JumpIfTrue(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU) goto ?"
+        return f"if (ACCU) goto offset_{target}"
+
+    def _op_JumpIfFalse(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (!ACCU) goto ?"
+        return f"if (!ACCU) goto offset_{target}"
+
+    def _op_JumpIfUndefinedOrNull(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU == nullish) goto ?"
+        return f"if (ACCU == null || ACCU == undefined) goto offset_{target}"
+
+    def _op_JumpIfUndefined(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU === undefined) goto ?"
+        return f"if (ACCU === undefined) goto offset_{target}"
+
+    def _op_JumpIfNotUndefined(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU !== undefined) goto ?"
+        return f"if (ACCU !== undefined) goto offset_{target}"
+
+    def _op_JumpIfJSReceiver(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (isJSReceiver(ACCU)) goto ?"
+        return f"if (isJSReceiver(ACCU)) goto offset_{target}"
+
+    def _op_JumpIfToBooleanTrueConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfToBooleanTrue(instr)
+
+    def _op_JumpIfToBooleanFalseConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfToBooleanFalse(instr)
+
+    def _op_JumpIfJSReceiverConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfJSReceiver(instr)
+
+    def _op_JumpIfUndefinedOrNullConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfUndefinedOrNull(instr)
+
+    def _op_JumpIfUndefinedConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfUndefined(instr)
+
+    def _op_JumpIfNotUndefinedConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfNotUndefined(instr)
+
+    def _op_JumpIfTrueConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfTrue(instr)
+
+    def _op_JumpIfFalseConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfFalse(instr)
+
+    def _op_JumpIfNull(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU === null) goto ?"
+        return f"if (ACCU === null) goto offset_{target}"
+
+    def _op_JumpIfNotNull(self, instr: Instruction) -> str:
+        target = self._find_target(instr)
+        if target is None:
+            return "if (ACCU !== null) goto ?"
+        return f"if (ACCU !== null) goto offset_{target}"
+
+    def _op_JumpIfNullConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfNull(instr)
+
+    def _op_JumpIfNotNullConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfNotNull(instr)
+
+    def _op_SwitchOnGeneratorState(self, instr: Instruction) -> str:
+        generator = self._reg_name(instr.args[0]) if instr.args else "generator"
+        return f"// SwitchOnGeneratorState {generator}"
+
+    def _op_SuspendGenerator(self, instr: Instruction) -> str:
+        generator = self._reg_name(instr.args[0]) if instr.args else "generator"
+        state = self._imm(instr.args[-1], "?") if instr.args else "?"
+        return f"// SuspendGenerator {generator}, state={state}"
+
+    def _op_ResumeGenerator(self, instr: Instruction) -> str:
+        generator = self._reg_name(instr.args[0]) if instr.args else "generator"
+        return f"ACCU = ResumeGenerator({generator})"
+
+    def _op_SwitchOnSmiNoFeedback(self, instr: Instruction) -> str:
+        args = ", ".join(instr.args)
+        suffix = f" {args}" if args else ""
+        return f"// SwitchOnSmiNoFeedback ACCU{suffix}"
+
+    def _op_LdaGlobalInsideTypeofIC(self, instr: Instruction) -> str:
+        return self._op_LdaGlobal(instr)
+
+    def _find_target(self, instr: Instruction) -> Optional[int]:
+        return parse_jump_target(instr)
+
+    def _op_CreateClosure(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = create_closure(<anonymous>)"
+        callee = self._const_token(instr.args[0])
+        return f"ACCU = create_closure({callee})"
+
+    def _op_PushContext(self, instr: Instruction) -> str:
+        dest = self._reg_name(instr.args[0]) if instr.args else "context"
+        return f"{dest} = pushContext(ACCU)"
+
+    def _op_PopContext(self, instr: Instruction) -> str:
+        source = self._reg_name(instr.args[0]) if instr.args else "context"
+        return f"context = {source}"
+
+    def _op_CreateFunctionContext(self, instr: Instruction) -> str:
+        scope = self._const_token(instr.args[0]) if instr.args else "<ScopeInfo>"
+        slots = self._imm(instr.args[1], "?") if len(instr.args) > 1 else "?"
+        return f"ACCU = create_function_context({scope}, {slots})"
+
+    def _op_CreateCatchContext(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = create_catch_context(ACCU, <ScopeInfo>)"
+        exc = self._reg_name(instr.args[0])
+        scope = self._const_token(instr.args[1]) if len(instr.args) > 1 else "<ScopeInfo>"
+        return f"ACCU = create_catch_context({exc}, {scope})"
+
+    def _op_TestReferenceEqual(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU === ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} === ACCU)"
+
+    def _op_TestEqualStrict(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU === ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} === ACCU)"
+
+    def _op_TestEqual(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU == ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} == ACCU)"
+
+    def _op_TestGreaterThan(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU > ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} > ACCU)"
+
+    def _op_TestGreaterThanOrEqual(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU >= ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} >= ACCU)"
+
+    def _op_TestLessThan(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU < ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} < ACCU)"
+
+    def _op_TestLessThanOrEqual(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (ACCU <= ?)"
+        ref = self._reg_name(instr.args[0])
+        return f"ACCU = ({ref} <= ACCU)"
+
+    def _op_TestUndetectable(self, instr: Instruction) -> str:
+        return "ACCU = isUndetectable(ACCU)"
+
+    def _op_TestTypeOf(self, instr: Instruction) -> str:
+        literal_id = _parse_number_token(instr.args[0]) if instr.args else None
+        literal = TYPEOF_LITERAL_FLAGS.get(literal_id, f"type_{literal_id}")
+        return f"ACCU = (typeof ACCU === {json.dumps(literal)})"
+
+    def _op_TestUndefined(self, instr: Instruction) -> str:
+        return "ACCU = (ACCU === undefined)"
+
+    def _op_TestInstanceOf(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ACCU = (? instanceof ACCU)"
+        value = self._reg_name(instr.args[0])
+        return f"ACCU = ({value} instanceof ACCU)"
+
+    def _op_TestIn(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 2)
+        value = self._reg_name(args[0]) if args else "?"
+        return f"ACCU = ({value} in ACCU)"
+
+    def _op_ForInContinue(self, instr: Instruction) -> str:
+        if len(instr.args) < 2:
+            return "ACCU = (for_in_index !== for_in_length)"
+        index = self._reg_name(instr.args[0])
+        length = self._reg_name(instr.args[1])
+        return f"ACCU = ({index} !== {length})"
+
+    def _op_Wide(self, instr: Instruction) -> str:
+        return "// Wide operand-scale prefix"
+
+    def _op_SetPendingMessage(self, instr: Instruction) -> str:
+        return "// SetPendingMessage"
+
+    def _op_ReThrow(self, instr: Instruction) -> str:
+        return "throw ACCU"
+
+    def _op_Throw(self, instr: Instruction) -> str:
+        return "throw ACCU"
+
+    def _op_ThrowReferenceErrorIfHole(self, instr: Instruction) -> str:
+        return ""
+
+    def _op_ToBoolean(self, instr: Instruction) -> str:
+        return "ACCU = truthy(ACCU)"
+
+    def _op_ToBooleanLogicalNot(self, instr: Instruction) -> str:
+        return "ACCU = !truthy(ACCU)"
+
+    def _op_LogicalNot(self, instr: Instruction) -> str:
+        return "ACCU = !truthy(ACCU)"
+
+    def _op_TypeOf(self, instr: Instruction) -> str:
+        return "ACCU = typeof ACCU"
+
+    def _op_ToNumeric(self, instr: Instruction) -> str:
+        return "ACCU = Number(ACCU)"
+
+    def _op_ToObject(self, instr: Instruction) -> str:
+        destination = self._reg_name(instr.args[0]) if instr.args else "ACCU"
+        return f"{destination} = Object(ACCU)"
+
+    def _op_ToString(self, instr: Instruction) -> str:
+        return "ACCU = String(ACCU)"
+
+    def _op_ToName(self, instr: Instruction) -> str:
+        destination = self._reg_name(instr.args[0]) if instr.args else "ACCU"
+        return f"{destination} = ACCU"
+
+    def _op_DeletePropertySloppy(self, instr: Instruction) -> str:
+        receiver = self._reg_name(instr.args[0]) if instr.args else "undefined"
+        return f"ACCU = delete {receiver}[ACCU]"
+
+    def _op_DeletePropertyStrict(self, instr: Instruction) -> str:
+        return self._op_DeletePropertySloppy(instr)
+
+    def _op_GetSuperConstructor(self, instr: Instruction) -> str:
+        destination = self._reg_name(instr.args[0]) if instr.args else "ACCU"
+        return f"{destination} = Object.getPrototypeOf({self.active_function_name})"
+
+    def _op_GetNamedPropertyFromSuper(self, instr: Instruction) -> str:
+        if len(instr.args) < 2:
+            return "ACCU = Reflect.get(Object.getPrototypeOf(ACCU), undefined, this)"
+        receiver = self._reg_name(instr.args[0])
+        key = self._const_token(instr.args[1])
+        return (
+            "ACCU = Reflect.get(Object.getPrototypeOf(ACCU), "
+            f"{key}, {receiver})"
+        )
+
+    def _op_ThrowIfNotSuperConstructor(self, instr: Instruction) -> str:
+        return ""
+
+    def _op_ThrowSuperAlreadyCalledIfNotHole(self, instr: Instruction) -> str:
+        return ""
+
+    def _op_ThrowSuperNotCalledIfHole(self, instr: Instruction) -> str:
+        return ""
+
+    def _op_ForInEnumerate(self, instr: Instruction) -> str:
+        source = self._reg_name(instr.args[0]) if instr.args else "ACCU"
+        return f"ACCU = ForInEnumerate({source})"
+
+    def _op_ForInPrepare(self, instr: Instruction) -> str:
+        if not instr.args:
+            return "ForInPrepare(?)"
+        regs = self._expand_range(instr.args[0])
+        slot = instr.args[1] if len(instr.args) > 1 else "[?]"
+        return f"{', '.join(regs)} = ForInPrepare(ACCU, {slot})"
+
+    def _op_ForInNext(self, instr: Instruction) -> str:
+        if len(instr.args) < 3:
+            return "ACCU = ForInNext(?)"
+        receiver = self._reg_name(instr.args[0])
+        index = self._reg_name(instr.args[1])
+        cache = ", ".join(self._expand_range(instr.args[2]))
+        slot = instr.args[3] if len(instr.args) > 3 else "[?]"
+        return f"ACCU = ForInNext({receiver}, {index}, {cache}, {slot})"
+
+    def _op_GetEnumeratedKeyedProperty(self, instr: Instruction) -> str:
+        if len(instr.args) < 3:
+            return "ACCU = get_enumerated_keyed_property(?)"
+        receiver = self._reg_name(instr.args[0])
+        index = self._reg_name(instr.args[1])
+        cache = self._reg_name(instr.args[2])
+        return f"ACCU = GetEnumeratedKeyedProperty({receiver}, {index}, {cache})"
+
+    def _op_ForInStep(self, instr: Instruction) -> str:
+        index = self._reg_name(instr.args[0]) if instr.args else "index"
+        return f"ACCU = ForInStep({index})"
+
+    def _op_JumpIfForInDone(self, instr: Instruction) -> str:
+        index = self._reg_name(instr.args[1]) if len(instr.args) > 1 else "index"
+        cache = self._reg_name(instr.args[2]) if len(instr.args) > 2 else "cache"
+        target = self._find_target(instr)
+        if target is None:
+            return f"if (ForInDone({index}, {cache})) goto ?"
+        return f"if (ForInDone({index}, {cache})) goto offset_{target}"
+
+    def _op_JumpIfForInDoneConstant(self, instr: Instruction) -> str:
+        return self._op_JumpIfForInDone(instr)
+
+    def _regexp_flags(self, value: Optional[int]) -> str:
+        if value is None:
+            return ""
+        flags = []
+        for bit, flag in (
+            (1, "g"),
+            (2, "i"),
+            (4, "m"),
+            (8, "s"),
+            (16, "u"),
+            (32, "y"),
+            (64, "d"),
+            (128, "v"),
+        ):
+            if value & bit:
+                flags.append(flag)
+        return "".join(flags)

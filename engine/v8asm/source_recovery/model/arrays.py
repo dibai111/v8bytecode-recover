@@ -1,0 +1,56 @@
+"""V8 fixed-array models."""
+
+from typing import Optional, Any
+import re
+from .base import V8HeapObject, V8Address, V8Smi
+
+
+NUMBER_RE = re.compile(
+    r"^[+-]?(?:(?:\d+\.\d*|\d*\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)$"
+)
+
+
+class V8FixedArray(V8HeapObject):
+    def __init__(self, address: int, i_type: str, lines: list[str]):
+        super().__init__(address, i_type, lines)
+        self.length: Optional[int] = None
+        self.elements: list[Any] = []
+
+    def parse(self):
+        for ln in self.raw_asm_lines:
+            if "- length:" in ln:
+                self.length = int(ln.split(":", 1)[1].strip())
+            elif ":" in ln:
+                left = ln.strip().split(":", 1)[0]
+                if not left.isdigit():
+                    continue
+                # e.g. "0: 0x12345 <SharedFunctionInfo foo>" or "0: 3"
+                _, rest = ln.split(":", 1)
+                rest = rest.strip()
+                # case 1: address
+                if rest.startswith("0x"):
+                    self.elements.append(V8Address.from_text(rest))
+                # case 2: smi (integer literal)
+                elif rest.lstrip("-").isdigit():
+                    self.elements.append(V8Smi(int(rest)))
+                elif NUMBER_RE.match(rest):
+                    self.elements.append(float(rest))
+                elif rest == "NaN":
+                    self.elements.append(float("nan"))
+                elif rest in {"Infinity", "+Infinity"}:
+                    self.elements.append(float("inf"))
+                elif rest == "-Infinity":
+                    self.elements.append(float("-inf"))
+                # case 3: fallback to raw string
+                else:
+                    self.elements.append(rest)
+
+    def __repr__(self):
+        return (f"<V8FixedArray: 0x{self.address:012x} "
+                f"len={self.length} elems={len(self.elements)}>")
+
+
+class V8TrustedFixedArray(V8FixedArray):
+    def __repr__(self):
+        return (f"<V8TrustedFixedArray: 0x{self.address:012x} "
+                f"len={self.length} elems={len(self.elements)}>")
