@@ -123,10 +123,9 @@ class ObjectStreamParser:
         size = size_in_tagged * self.tagged_size
         if size < self.tagged_size or size > 512 * 1024 * 1024:
             raise ParseError(f"implausible serialized object size {size}")
+        _, map_reference = self._reference(self.reader.byte(), None, 0)
         obj = SerializedObject(len(self.objects), space, size, start)
         self.objects.append(obj)
-
-        _, map_reference = self._reference(self.reader.byte(), None, 0)
         obj.map_reference = map_reference
         current = 1
         while current < size_in_tagged:
@@ -135,11 +134,41 @@ class ObjectStreamParser:
             if consumed < 0 or current + consumed > size_in_tagged:
                 raise ParseError(f"serializer entry overruns object {obj.index}")
             if reference is not None and consumed:
-                obj.references[current * self.tagged_size] = reference
+                for repeat_slot in range(consumed):
+                    obj.references[(current + repeat_slot) * self.tagged_size] = reference
             current += consumed
         if current != size_in_tagged:
             raise ParseError(
                 f"object {obj.index} ended at slot {current}, "
+                f"expected {size_in_tagged}"
+            )
+        return obj
+
+    def _meta_object(self) -> SerializedObject:
+        """Read V8's special self-mapped meta-map allocation."""
+        start = self.reader.position - 1
+        # Map::kSize is 40 bytes on 32-bit builds and 72 bytes on 64-bit
+        # pointer-compressed V8 10.x builds. The optional padding field is
+        # part of the serialized object even though it is not a tagged slot.
+        size = 40 if self.tagged_size == 4 else 72
+        size_in_tagged = size // self.tagged_size
+        obj = SerializedObject(len(self.objects), 0, size, start)
+        self.objects.append(obj)
+        obj.map_reference = Reference("object", object_index=obj.index)
+
+        current = 1
+        while current < size_in_tagged:
+            tag = self.reader.byte()
+            consumed, reference = self._reference(tag, obj, current)
+            if consumed < 0 or current + consumed > size_in_tagged:
+                raise ParseError(f"serializer entry overruns meta-map {obj.index}")
+            if reference is not None and consumed:
+                for repeat_slot in range(consumed):
+                    obj.references[(current + repeat_slot) * self.tagged_size] = reference
+            current += consumed
+        if current != size_in_tagged:
+            raise ParseError(
+                f"meta-map {obj.index} ended at slot {current}, "
                 f"expected {size_in_tagged}"
             )
         return obj
@@ -160,6 +189,9 @@ class ObjectStreamParser:
             return 1, reference
         if tag == tags["ReadOnlyHeapRef"]:
             return 1, Reference("read_only", (self.reader.uint30(), self.reader.uint30()))
+        if tag == tags.get("NewMetaMap"):
+            meta_map = self._meta_object()
+            return 1, Reference("object", object_index=meta_map.index)
         if tag == tags["RootArray"]:
             reference = Reference("root", (self.reader.uint30(),))
             self._add_hot(reference)
@@ -189,12 +221,18 @@ class ObjectStreamParser:
         if fixed_repeat is not None and fixed_repeat <= tag < fixed_repeat + 16:
             count = tag - fixed_repeat + 2
             root = self.reader.byte()
-            return count, Reference("repeated_root", (root, count))
+            consumed, reference = self._reference(root, obj, slot)
+            if consumed != 1:
+                raise ParseError("repeated serializer object did not consume one slot")
+            return count, reference
         variable_repeat = tags.get("VariableRepeat", tags.get("VariableRepeatRoot"))
         if variable_repeat is not None and tag == variable_repeat:
             count = self.reader.uint30() + 18
             root = self.reader.byte()
-            return count, Reference("repeated_root", (root, count))
+            consumed, reference = self._reference(root, obj, slot)
+            if consumed != 1:
+                raise ParseError("repeated serializer object did not consume one slot")
+            return count, reference
         if tag == tags["Nop"]:
             return 0, None
         if tag == tags.get("RegisterPendingForwardRef"):

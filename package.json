@@ -1,12 +1,14 @@
 {
   "name": "v8blob-to-js",
-  "version": "0.4.1",
-  "description": "Recover structured, syntax-validated JavaScript from V8 cached bytecode.",
+  "version": "0.7.0",
+  "description": "PowerShell-first recovery and analysis toolkit for V8 cached bytecode.",
   "type": "module",
   "bin": {
     "v8blob-to-js": "bin/v8blob-to-js.mjs",
     "v8blob-benchmark": "bin/v8blob-benchmark.mjs",
-    "v8blob-profiles": "bin/v8blob-profiles.mjs"
+    "v8blob-profiles": "bin/v8blob-profiles.mjs",
+    "v8blob-inspect": "bin/v8blob-inspect.mjs",
+    "v8blob-doctor": "bin/v8blob-doctor.mjs"
   },
   "files": [
     "bin/",
@@ -14,13 +16,16 @@
     "engine/v8asm/LICENSE",
     "engine/v8asm/cached_data/",
     "engine/v8asm/source_recovery/",
-    "v8blob-to-js.cmd"
+    "powershell/",
+    "v8blob-to-js.ps1",
+    "assets/readme/"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "check": "node --check bin/v8blob-to-js.mjs && node --check bin/v8blob-benchmark.mjs && node --check bin/v8blob-profiles.mjs",
+    "check": "node --check bin/v8blob-to-js.mjs && node --check bin/v8blob-benchmark.mjs && node --check bin/v8blob-profiles.mjs && node --check bin/v8blob-inspect.mjs && node --check bin/v8blob-doctor.mjs",
+    "test": "node --test",
     "profiles:validate": "node bin/v8blob-profiles.mjs validate",
     "profiles:list": "node bin/v8blob-profiles.mjs list"
   },

@@ -9,6 +9,11 @@ import struct
 from pathlib import Path
 
 from .header import CacheHeader, parse_header
+from .legacy_snapshot import (
+    LegacySnapshotImage,
+    locate_legacy_snapshot,
+    parse_legacy_snapshot,
+)
 from .profiles import Opcode, Profile, ProfileSet, load_profiles
 from .object_stream import ObjectStreamParser, ParseError, Reference, SerializedObject
 from .snapshot import ReadOnlySnapshot
@@ -487,7 +492,7 @@ def _format_heap_number(value: float) -> str:
 def _profile_string(
     reference: Reference,
     profile: Profile,
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
     tagged_size: int,
 ) -> str | None:
     if reference.kind == "root" and reference.values:
@@ -504,6 +509,36 @@ def _profile_string(
                 return sized_strings[offset]
             return profile.read_only_strings.get(offset)
     return None
+
+
+def _read_only_reference_hints(
+    objects: list[SerializedObject],
+) -> tuple[tuple[int, int], ...]:
+    hints: set[tuple[int, int]] = set()
+    for obj in objects:
+        references = (obj.map_reference, *obj.references.values())
+        for reference in references:
+            if reference is not None and reference.kind == "read_only":
+                if len(reference.values) == 2:
+                    hints.add((reference.values[0], reference.values[1]))
+    return tuple(sorted(hints))
+
+
+def _parse_snapshot(
+    snapshot_blob: bytes,
+    profile: Profile,
+    tagged_size: int,
+    objects: list[SerializedObject],
+) -> ReadOnlySnapshot | LegacySnapshotImage:
+    if profile.has_ro_snapshot_checksum:
+        return ReadOnlySnapshot.parse(snapshot_blob, profile, tagged_size)
+    snapshot_data = locate_legacy_snapshot(snapshot_blob, profile)
+    return parse_legacy_snapshot(
+        snapshot_data,
+        profile,
+        tagged_size,
+        _read_only_reference_hints(objects),
+    )
 
 
 def _map_type(obj: SerializedObject, profile: Profile) -> str | None:
@@ -785,7 +820,7 @@ def _reference_string(
     profile: Profile,
     objects: list[SerializedObject],
     tagged_size: int,
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> str | None:
     if reference is None:
         return None
@@ -800,7 +835,7 @@ def _scope_function_name(
     profile: Profile,
     objects: list[SerializedObject],
     tagged_size: int,
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> tuple[Reference | None, str | None]:
     image, present = obj.image()
     layout = profile.scope_info_layout
@@ -862,7 +897,7 @@ def _function_infos(
     arrays: list[BytecodeArray],
     profile: Profile,
     tagged_size: int,
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> dict[int, FunctionInfo]:
     arrays_by_object = {array.object_index: array for array in arrays}
     infos: dict[int, FunctionInfo] = {}
@@ -906,7 +941,7 @@ def _format_reference(
     profile: Profile,
     objects: list[SerializedObject],
     tagged_size: int,
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
     functions: dict[int, FunctionInfo] | None = None,
 ) -> str:
     target = _target_object(reference, objects)
@@ -972,7 +1007,7 @@ def _render_reachable_objects(
     rendered_strings: set[tuple[str, int]],
     rendered_objects: set[int],
     functions: dict[int, FunctionInfo],
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> list[str]:
     lines: list[str] = []
 
@@ -1233,7 +1268,7 @@ def _render_constant_pool(
     rendered_strings: set[tuple[str, int]],
     rendered_objects: set[int],
     functions: dict[int, FunctionInfo],
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> list[str]:
     if not array.constant_pool:
         return []
@@ -1274,7 +1309,7 @@ def _render_function_infos(
     profile: Profile,
     tagged_size: int,
     rendered_strings: set[tuple[str, int]],
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> list[str]:
     arrays_by_object = {array.object_index: array for array in arrays}
     lines: list[str] = []
@@ -1358,7 +1393,7 @@ def _render(
     objects: list[SerializedObject],
     arrays: list[BytecodeArray],
     runtime_variant: str | None,
-    snapshot: ReadOnlySnapshot | None,
+    snapshot: ReadOnlySnapshot | LegacySnapshotImage | None,
 ) -> str:
     if header.raw_payload:
         source = (
@@ -1487,8 +1522,8 @@ def disassemble_bytes(
         if arrays:
             snapshot = None
             if snapshot_blob is not None:
-                snapshot = ReadOnlySnapshot.parse(
-                    snapshot_blob, profile, tagged_size
+                snapshot = _parse_snapshot(
+                    snapshot_blob, profile, tagged_size, objects
                 )
                 if not header.raw_payload and snapshot.magic != header.magic:
                     raise ValueError(

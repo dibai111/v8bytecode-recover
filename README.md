@@ -1,269 +1,205 @@
 # v8blob-to-js
 
-[繁體中文](#繁體中文) | [English](#english)
+<p align="center">
+  <img src="./assets/readme/recovery-pipeline.svg" width="100%" alt="v8blob-to-js 將 V8 cached bytecode 經過 profile 與 snapshot 偵測，還原成 JavaScript，再輸出函式與 graph 分析">
+</p>
 
----
+PowerShell-first 工具，將 V8 `.v8blob`／`.jsc` cached bytecode 還原成可閱讀的 JavaScript 近似源碼，並在同一條 pipeline 完成驗證、函式索引、call graph、tree、報告及可重用 artifact。
 
-# 繁體中文
+[繁體中文](#繁體中文) · [English](#english)
 
-## 項目簡介
+## 繁體中文
 
-`v8blob-to-js` 用於將 V8 產生的 `.v8blob`／`.jsc` cached bytecode
-還原成可讀的 JavaScript 近似源碼。
+### 最短路徑
 
-主要功能：
-
-- 直接處理單一 blob 或整個目錄。
-- 自動識別內置 V8 profile。
-- 支援 matching startup snapshot。
-- 可選用 matching patched `d8` 作後端。
-- 只輸出通過 JavaScript syntax 和 residue validation 的結果。
-- 預設只產生 `.js`，不產生分析 report。
-
-## 快速開始
-
-### 1. 安裝環境
-
-- Node.js 18 或更新版本
-- Python 3
+需求：Node.js 18+。處理 raw bytecode 需要 Python 3；反組譯文字及已驗證 recovery artifact 可不依賴 Python 重跑分析。
 
 ```powershell
 cd D:\path\to\v8blob-to-js
-npm install
+.\v8blob-to-js.ps1
 ```
 
-### 2. 還原一個 blob
+選擇 `1` 即可進入快速恢復：輸入一個檔案或目錄，輸出路徑直接按 Enter 使用 `output`。工具會自動識別 raw、反組譯文字及 `.v8recovery.json`，自動搜尋附近的 `snapshot_blob.bin`、`v8_context_snapshot.bin` 及版本化 `node.exe`（可直接解出 legacy V8 snapshot），並使用內建 profile/backend 預設值。快速模式亦會自動重用已驗證輸出，重跑不會浪費時間處理未改動的檔案。
+
+不需要互動選項時，直接執行 CLI：
 
 ```powershell
-node .\bin\v8blob-to-js.mjs .\input\index.js.v8blob
+.\v8blob-to-js.ps1 -Action recover `
+  -InputPath .\input -OutputPath .\output
 ```
 
-或者在 Windows 使用：
-
-```powershell
-.\v8blob-to-js.cmd .\input\index.js.v8blob
-```
-
-結果預設寫入 `output`：
+目錄會遞迴掃描並保留相對路徑：
 
 ```text
+input/
+├─ app.jsc
+├─ nested/source.disassembly.txt
+└─ saved.v8recovery.json
+
 output/
-└─ index.js
+├─ app.js
+├─ nested/source.js
+└─ saved.js
 ```
 
-### 3. 還原整個目錄
+### 先看結果，再看細節
+
+成功輸出的 JavaScript 必須通過 syntax check 及 decompiler-residue check；只有在 residue 完全來自缺失 snapshot 的 read-only references 時，工具才會輸出帶有 best-effort 標記的 partial source。其他失敗檔案只會出現在 JSON report，不會被當成有效 source 寫出。分析輸出集中在 `.analysis/`，快速 menu 產生的 `recovery-report.json` 及可恢復的 `recovery-manifest.json` 則放在輸出根目錄。
+
+| 輸出 | 用途 |
+| --- | --- |
+| `*.js` | 通過品質檢查的近似源碼 |
+| `*.disassembly.txt` | 原始或輸入的反組譯內容 |
+| `*.functions.json` | 函式索引、nested hierarchy、範圍及參考 |
+| `*.callgraph.json` | 函式 call/reference graph |
+| `*.tree.json` | 可限制深度的 declarer、call 或 reference tree |
+| `*.names.json` | address-derived 名稱 mapping |
+| `*.v8recovery.json` | 可在沒有 Python/d8 時重用的已驗證 artifact |
+| `recovery-report.json` | 每個輸入的成功、失敗及品質 metrics |
+| `recovery-manifest.json` | 輸入 hash、設定指紋、逐檔進度及 resume 狀態 |
+
+### 一條 pipeline，多種證據
+
+這個工具不只把 bytecode 轉成文字，還把恢復結果整理成可以檢查、重跑及程式化消費的資料：
+
+- 自動偵測單檔或混合目錄的輸入格式。
+- 自動選擇 matching V8 profile；需要時可指定 patched `d8`。
+- 支援 modern startup snapshot 及舊版 V8/Node embedded snapshot，按 cached blob 的 read-only offsets 嚴格對齊。
+- 只保留通過 syntax、residue、closure binding 檢查的 source。
+- 缺少舊版 snapshot 時，read-only references 會轉成穩定 placeholder 並在 report 標記 `partial`；需要零容忍時使用 `--strict`。
+- 大型目錄可用 manifest 逐檔保存進度；輸出通過 syntax/residue 驗證後才可被 resume 重用。
+- 以 tokenizer 建立函式索引，支援 nested function、arrow function、function expression 及 lexical scope。
+- 由同一索引產生 function files、call graph、reference graph、tree、name mapping。
+- 用 PowerShell 提供快速恢復、inspect、doctor、profiles 及 benchmark；CLI 仍適合 CI。
+
+### 分析與 artifact
+
+一次輸出多種分析資料：
 
 ```powershell
-node .\bin\v8blob-to-js.mjs .\input -o .\recovered
+.\v8blob-to-js.ps1 -Action recover -InputPath .\input `
+  -Emit functions,callgraph,tree,names -OutputPath .\output
 ```
 
-工具會遞迴尋找 `.v8blob` 和 `.jsc`，並保留原有目錄結構。
+產生可重用 artifact：
 
-## 常用選項
+```powershell
+.\v8blob-to-js.ps1 -Action recover -InputPath .\input `
+  -Emit serialized -OutputPath .\artifacts
 
-```text
--o, --output DIR        指定輸出目錄
-    --profile VERSION   手動指定 V8 profile
-    --snapshot FILE     指定 matching snapshot_blob.bin
-    --backend NAME      auto、profile 或 d8
-    --d8 FILE           指定 matching patched d8
-    --emit KIND         額外輸出 disassembly、translated 或 cfg
-    --level 1-4         選擇反編譯層級，預設 4
+.\v8blob-to-js.ps1 -Action recover `
+  -InputPath .\artifacts\.analysis\sample.v8recovery.json `
+  -Emit functions -OutputPath .\replay
 ```
 
-查看全部選項：
+查看 blob header、profile、snapshot 及 hash：
+
+```powershell
+.\v8blob-to-js.ps1 -Action inspect -InputPath .\input\app.jsc
+.\v8blob-to-js.ps1 -Action doctor
+```
+
+查看完整 CLI 參數：
 
 ```powershell
 node .\bin\v8blob-to-js.mjs --help
 ```
 
-## V8 Profiles
+`--strict` 會在任何 unresolved read-only reference 存在時保留原本的失敗行為：
 
-列出或驗證內置 profiles：
+```powershell
+.\v8blob-to-js.ps1 -Action recover -InputPath .\input -Strict
+```
+
+### 大型目錄與中斷恢復
+
+PowerShell menu 的快速恢復已預設開啟 resume。CLI 可明確使用：
+
+```powershell
+.\v8blob-to-js.ps1 -Action recover `
+  -InputPath .\input -OutputPath .\output -Resume
+```
+
+工具會將每個輸入的 SHA-256、大小、設定 fingerprint、輸出 hash 及分析檔案清單寫入 `recovery-manifest.json`。再次執行時只會重用同一輸入、同一設定且仍通過 syntax/residue 檢查的結果；輸入、輸出或分析檔案被改動，便會自動失效並重新恢復。manifest 亦會在每檔完成後更新，適合處理大型目錄或中途停止後繼續。
+
+### Matching d8 與 profiles
+
+當內建 profile 未覆蓋目標 V8 版本，可提供同版本、支援 `loadjsc()` 的 patched `d8`：
+
+```powershell
+.\v8blob-to-js.ps1 -Action recover -InputPath .\input\app.jsc `
+  -Backend d8 -D8Path D:\path\to\d8.exe
+```
 
 ```powershell
 npm run profiles:list
 npm run profiles:validate
-```
 
-為新的正式 V8 tag 生成 profile：
-
-```powershell
 python -B engine/v8asm/cached_data/tooling/generate_profiles.py `
   --version V8_VERSION
 ```
 
-生成結果會直接寫入：
+### 模組結構
 
 ```text
-engine/v8asm/cached_data/profiles/
+v8blob-to-js.ps1          PowerShell 入口
+powershell/               menu、actions、Node runner
+bin/                      CLI、inspect、doctor、profiles、benchmark
+src/cli/                  參數解析
+src/io/                   輸入發現、artifact、輸出路徑及 recovery manifest
+src/pipeline/             批次恢復及分析輸出
+src/analysis/             tokenizer、index、graph、tree、function files
+src/inspection/           blob header/profile 診斷
+src/reporting/            report 及 source summary
+src/validation/           syntax/residue 品質門檻
+engine/v8asm/             V8 profiles 及 source-recovery engine
+test/                     Node 內建測試
 ```
 
-省略 `--version` 會重新生成全部內置 profiles。系統沒有 C preprocessor 時，
-先安裝 generation-only dependency：
+### 限制
 
-```powershell
-python -m pip install pcpp
-```
-
-## 使用 matching d8
-
-如 profile backend 未支援目標版本，可指定相同 V8 版本並包含 `loadjsc()` 的
-patched `d8`：
-
-```powershell
-node .\bin\v8blob-to-js.mjs input.jsc `
-  --backend d8 `
-  --d8 D:\path\to\d8.exe
-```
-
-## 說明
-
-- V8 cached bytecode 格式與 V8 版本、build flags 和 snapshot 有關。
+- cached bytecode 受 V8 version、build flags 及 startup snapshot 影響。
 - 還原結果是語義近似源碼，不是原始檔案的逐字副本。
-- 原始註解、排版和部分 identifier names 不存在於 bytecode 中。
-- 控制流和 expressions 可能以等價但不同的結構輸出。
-- 發現未解析 opcode、placeholder、invalid syntax 或 V8 residue 時，該檔案會標記為失敗。
+- 原始註解、排版及部分 identifier names 不存在於 bytecode 中。
+- 控制流及 expressions 可能以等價但不同的結構輸出。
+- 發現 unresolved opcode、非 read-only placeholder、invalid syntax 或 V8 residue 時，該檔案會標記為失敗；缺失 snapshot 造成的 read-only residue 會清楚標記為 partial。
 
-## 參考與致謝
+### 開發與驗證
 
-- [suleram/View8](https://github.com/suleram/View8)
-- [xqy2006/jsc2js](https://github.com/xqy2006/jsc2js)
-- [V8](https://github.com/v8/v8)
-
-本項目使用 MIT License。`engine/v8asm` 保留其原有 MIT 授權聲明。
-
----
-
-# English
-
-[繁體中文](#繁體中文) | [English](#english)
-
-## Overview
-
-`v8blob-to-js` recovers readable, approximate JavaScript source from V8
-`.v8blob` and `.jsc` cached bytecode.
-
-Main features:
-
-- Process one blob or a complete directory.
-- Automatically detect bundled V8 profiles.
-- Use a matching startup snapshot when available.
-- Optionally use a matching patched `d8` backend.
-- Write JavaScript only after syntax and residue validation pass.
-- Produce only `.js` files by default, with no analysis reports.
-
-## Quick Start
-
-### 1. Requirements
-
-- Node.js 18 or newer
-- Python 3
+專案沒有 runtime npm dependency，使用 Node 內建 test runner：
 
 ```powershell
-cd D:\path\to\v8blob-to-js
-npm install
+npm run check
+npm test
+npm run profiles:validate
+python -m unittest discover -s engine/v8asm -p 'test_*.py'
 ```
 
-### 2. Recover one blob
+參考實作：[suleram/View8](https://github.com/suleram/View8) · [xqy2006/jsc2js](https://github.com/xqy2006/jsc2js) · [V8](https://github.com/v8/v8)
+
+本專案使用 MIT License；`engine/v8asm` 保留其原有 MIT 授權聲明。
+
+## English
+
+<details>
+<summary>English overview and first commands</summary>
+
+`v8blob-to-js` is a PowerShell-first recovery and analysis pipeline for V8 `.v8blob` and `.jsc` cached bytecode. It emits readable approximate JavaScript only after syntax and decompiler-residue checks pass, then can produce function indexes, call/reference graphs, trees, name maps, reports, and reusable `.v8recovery.json` artifacts.
+
+Node.js 18+ is required. Python 3 is needed for raw bytecode; disassembly text and validated recovery artifacts can be replayed without Python.
 
 ```powershell
-node .\bin\v8blob-to-js.mjs .\input\index.js.v8blob
-```
-
-On Windows, the launcher can also be used:
-
-```powershell
-.\v8blob-to-js.cmd .\input\index.js.v8blob
-```
-
-The default output is:
-
-```text
-output/
-└─ index.js
-```
-
-### 3. Recover a directory
-
-```powershell
-node .\bin\v8blob-to-js.mjs .\input -o .\recovered
-```
-
-The directory is scanned recursively for `.v8blob` and `.jsc` files while
-preserving its relative structure.
-
-## Common Options
-
-```text
--o, --output DIR        Set the output directory
-    --profile VERSION   Override V8 profile detection
-    --snapshot FILE     Use a matching snapshot_blob.bin
-    --backend NAME      Use auto, profile, or d8
-    --d8 FILE           Use a matching patched d8
-    --emit KIND         Add disassembly, translated, or cfg output
-    --level 1-4         Select the decompiler level; default: 4
-```
-
-Show every option:
-
-```powershell
+.\v8blob-to-js.ps1
+.\v8blob-to-js.ps1 -Action recover -InputPath .\input -OutputPath .\output
 node .\bin\v8blob-to-js.mjs --help
 ```
 
-## V8 Profiles
+The default `auto` format detects raw blobs, disassembly text, and serialized artifacts. Directory input can mix formats while preserving relative paths. If residue is limited to missing read-only snapshot references, the default mode emits a clearly marked best-effort source; use `--strict` to reject it. Use `--resume` to persist and reuse validated batch results through `recovery-manifest.json`. Use `--emit functions`, `--emit callgraph`, `--emit tree`, `--emit names`, or `--emit serialized` for analysis outputs under `.analysis/`.
 
-List or validate bundled profiles:
+When a bundled profile does not cover the target V8 build, pass a matching patched `d8` with `-Backend d8 -D8Path ...`. V8 cached data remains version, build-flag, and snapshot sensitive; recovered output is semantic reconstruction rather than the original source.
 
-```powershell
-npm run profiles:list
-npm run profiles:validate
-```
+</details>
 
-Generate a profile from an official V8 tag:
+## License
 
-```powershell
-python -B engine/v8asm/cached_data/tooling/generate_profiles.py `
-  --version V8_VERSION
-```
-
-Profiles are written directly to:
-
-```text
-engine/v8asm/cached_data/profiles/
-```
-
-Run the generator without `--version` to rebuild every bundled profile. If no
-system C preprocessor is available, install the generation-only dependency:
-
-```powershell
-python -m pip install pcpp
-```
-
-## Matching d8 Backend
-
-When the profile backend does not cover the target, provide a patched `d8`
-from the same V8 version with `loadjsc()` support:
-
-```powershell
-node .\bin\v8blob-to-js.mjs input.jsc `
-  --backend d8 `
-  --d8 D:\path\to\d8.exe
-```
-
-## Notes
-
-- V8 cached bytecode depends on the V8 version, build flags, and snapshot.
-- Recovered JavaScript is a semantic approximation, not a byte-for-byte copy of the original source.
-- Original comments, formatting, and some identifier names are absent from bytecode.
-- Control flow and expressions may be emitted using equivalent but different structures.
-- Files containing unresolved opcodes, placeholders, invalid syntax, or V8 residue are reported as failed.
-
-## References and Acknowledgments
-
-- [suleram/View8](https://github.com/suleram/View8)
-- [xqy2006/jsc2js](https://github.com/xqy2006/jsc2js)
-- [V8](https://github.com/v8/v8)
-
-This project is released under the MIT License. `engine/v8asm` retains its
-original MIT license notice.
+MIT. The `engine/v8asm` directory retains its original license notice.

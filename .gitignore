@@ -1,7 +1,10 @@
 output/
+output-*/
 coverage/
 *.log
 __pycache__/
 *.py[cod]
+.agents/
+skills-lock.json
 .DS_Store
 Thumbs.db
