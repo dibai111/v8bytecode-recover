@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 from typing import List
 
 from ..model.bytecode import CodeLine

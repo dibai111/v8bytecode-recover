@@ -44,9 +44,6 @@ class V8Address(Generic[T]):
     def __str__(self):
         return self.__repr__()
 
-    def resolve(self) -> T:
-        raise NotImplementedError("Address resolution not implemented.")
-
     @classmethod
     def from_text(cls, text: str) -> "V8Address":
         parts = text.strip().split(" ", maxsplit=1)

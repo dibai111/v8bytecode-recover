@@ -73,4 +73,4 @@ function buildFunctionTree(analysis, options = {}) {
   };
 }
 
-export { buildFunctionTree, resolveRoot, treeModes };
+export { buildFunctionTree, treeModes };

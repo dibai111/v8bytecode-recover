@@ -77,4 +77,4 @@ function writeFunctionFiles(outputRoot, relativeOutput, source, analysis, option
   };
 }
 
-export { functionDirectory, safeFileName, writeFunctionFiles };
+export { writeFunctionFiles };

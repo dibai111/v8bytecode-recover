@@ -103,9 +103,5 @@ function selectFunctions(analysis, options = {}) {
 }
 
 export {
-  defaultSplitMode,
-  matchesFunctionPattern,
-  normalizeMaxDepth,
   selectFunctions,
-  splitPatterns,
 };

@@ -509,9 +509,6 @@ function functionSource(source, item) {
 
 export {
   analyzeSource,
-  buildCallGraph,
-  buildReferenceGraph,
-  buildRelationGraph,
   functionSource,
   tokenize,
 };

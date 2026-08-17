@@ -120,4 +120,4 @@ function benchmark(entryPath, input, backends, options = {}) {
   }
 }
 
-export { benchmark, compareBackends, sha256 };
+export { benchmark };

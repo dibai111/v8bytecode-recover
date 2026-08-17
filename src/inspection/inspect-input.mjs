@@ -153,4 +153,4 @@ function renderInspection(items) {
   return `${lines.join('\n')}\n`;
 }
 
-export { detectHeader, inspectFile, inspectInput, renderInspection };
+export { inspectFile, inspectInput, renderInspection };

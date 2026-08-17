@@ -596,4 +596,4 @@ function recoverSources(options, paths, backend) {
   return { emitted, failed, reportPath, files };
 }
 
-export { recoverSources, researchOutputPath };
+export { recoverSources };

@@ -71,4 +71,4 @@ function createD8Backend({ d8Path, engineRoot, python }) {
   };
 }
 
-export { createD8Backend, resolveD8Path };
+export { createD8Backend };

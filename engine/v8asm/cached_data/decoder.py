@@ -14,7 +14,7 @@ from .legacy_snapshot import (
     locate_legacy_snapshot,
     parse_legacy_snapshot,
 )
-from .profiles import Opcode, Profile, ProfileSet, load_profiles
+from .profiles import Profile, ProfileSet, load_profiles
 from .object_stream import ObjectStreamParser, ParseError, Reference, SerializedObject
 from .snapshot import ReadOnlySnapshot
 

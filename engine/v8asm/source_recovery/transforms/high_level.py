@@ -30,7 +30,7 @@ from .cleanup import (
     _simplify_accu_throw,
     _simplify_accu_return,
 )
-from .common import _compact_compound_assignments, _extract_indent
+from .common import _extract_indent
 from .iteration import (
     _avoid_for_of_loop_var_source_collision,
     _recover_array_spread_appends_until_stable,
