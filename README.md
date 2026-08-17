@@ -1,7 +1,7 @@
-# v8blob-to-js
+# v8bytecode-recover
 
 <p align="center">
-  <img src="./assets/readme/recovery-pipeline.svg" width="100%" alt="v8blob-to-js 將 V8 cached bytecode 經過 profile 與 snapshot 偵測，還原成 JavaScript，再輸出函式與 graph 分析">
+  <img src="./assets/readme/recovery-pipeline.svg" width="100%" alt="v8bytecode-recover 將 V8 cached bytecode 經過 profile 與 snapshot 偵測，還原成 JavaScript，再輸出函式與 graph 分析">
 </p>
 
 PowerShell-first 工具，將 V8 `.v8blob`／`.jsc` cached bytecode 還原成可閱讀的 JavaScript 近似源碼，並在同一條 pipeline 完成驗證、函式索引、call graph、tree、報告及可重用 artifact。
@@ -15,8 +15,8 @@ PowerShell-first 工具，將 V8 `.v8blob`／`.jsc` cached bytecode 還原成可
 需求：Node.js 18+。處理 raw bytecode 需要 Python 3；反組譯文字及已驗證 recovery artifact 可不依賴 Python 重跑分析。
 
 ```powershell
-cd D:\path\to\v8blob-to-js
-.\v8blob-to-js.ps1
+cd D:\path\to\v8bytecode-recover
+.\v8bytecode-recover.ps1
 ```
 
 選擇 `1` 即可進入快速恢復：輸入一個檔案或目錄，輸出路徑直接按 Enter 使用 `output`。工具會自動識別 raw、反組譯文字及 `.v8recovery.json`，自動搜尋附近的 `snapshot_blob.bin`、`v8_context_snapshot.bin` 及版本化 `node.exe`（可直接解出 legacy V8 snapshot），並使用內建 profile/backend 預設值。快速模式亦會自動重用已驗證輸出，重跑不會浪費時間處理未改動的檔案。
@@ -24,7 +24,7 @@ cd D:\path\to\v8blob-to-js
 不需要互動選項時，直接執行 CLI：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action recover `
+.\v8bytecode-recover.ps1 -Action recover `
   -InputPath .\input -OutputPath .\output
 ```
 
@@ -77,17 +77,17 @@ output/
 一次輸出多種分析資料：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action recover -InputPath .\input `
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input `
   -Emit functions,callgraph,tree,names -OutputPath .\output
 ```
 
 產生可重用 artifact：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action recover -InputPath .\input `
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input `
   -Emit serialized -OutputPath .\artifacts
 
-.\v8blob-to-js.ps1 -Action recover `
+.\v8bytecode-recover.ps1 -Action recover `
   -InputPath .\artifacts\.analysis\sample.v8recovery.json `
   -Emit functions -OutputPath .\replay
 ```
@@ -95,20 +95,20 @@ output/
 查看 blob header、profile、snapshot 及 hash：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action inspect -InputPath .\input\app.jsc
-.\v8blob-to-js.ps1 -Action doctor
+.\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
+.\v8bytecode-recover.ps1 -Action doctor
 ```
 
 查看完整 CLI 參數：
 
 ```powershell
-node .\bin\v8blob-to-js.mjs --help
+node .\bin\v8bytecode-recover.mjs --help
 ```
 
 `--strict` 會在任何 unresolved read-only reference 存在時保留原本的失敗行為：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action recover -InputPath .\input -Strict
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -Strict
 ```
 
 ### 大型目錄與中斷恢復
@@ -116,7 +116,7 @@ node .\bin\v8blob-to-js.mjs --help
 PowerShell menu 的快速恢復已預設開啟 resume。CLI 可明確使用：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action recover `
+.\v8bytecode-recover.ps1 -Action recover `
   -InputPath .\input -OutputPath .\output -Resume
 ```
 
@@ -127,7 +127,7 @@ PowerShell menu 的快速恢復已預設開啟 resume。CLI 可明確使用：
 當內建 profile 未覆蓋目標 V8 版本，可提供同版本、支援 `loadjsc()` 的 patched `d8`：
 
 ```powershell
-.\v8blob-to-js.ps1 -Action recover -InputPath .\input\app.jsc `
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input\app.jsc `
   -Backend d8 -D8Path D:\path\to\d8.exe
 ```
 
@@ -142,7 +142,7 @@ python -B engine/v8asm/cached_data/tooling/generate_profiles.py `
 ### 模組結構
 
 ```text
-v8blob-to-js.ps1          PowerShell 入口
+v8bytecode-recover.ps1    PowerShell 入口
 powershell/               menu、actions、Node runner
 bin/                      CLI、inspect、doctor、profiles、benchmark
 src/cli/                  參數解析
@@ -184,14 +184,14 @@ python -m unittest discover -s engine/v8asm -p 'test_*.py'
 <details>
 <summary>English overview and first commands</summary>
 
-`v8blob-to-js` is a PowerShell-first recovery and analysis pipeline for V8 `.v8blob` and `.jsc` cached bytecode. It emits readable approximate JavaScript only after syntax and decompiler-residue checks pass, then can produce function indexes, call/reference graphs, trees, name maps, reports, and reusable `.v8recovery.json` artifacts.
+`v8bytecode-recover` is a PowerShell-first recovery and analysis pipeline for V8 `.v8blob` and `.jsc` cached bytecode. It emits readable approximate JavaScript only after syntax and decompiler-residue checks pass, then can produce function indexes, call/reference graphs, trees, name maps, reports, and reusable `.v8recovery.json` artifacts.
 
 Node.js 18+ is required. Python 3 is needed for raw bytecode; disassembly text and validated recovery artifacts can be replayed without Python.
 
 ```powershell
-.\v8blob-to-js.ps1
-.\v8blob-to-js.ps1 -Action recover -InputPath .\input -OutputPath .\output
-node .\bin\v8blob-to-js.mjs --help
+.\v8bytecode-recover.ps1
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output
+node .\bin\v8bytecode-recover.mjs --help
 ```
 
 The default `auto` format detects raw blobs, disassembly text, and serialized artifacts. Directory input can mix formats while preserving relative paths. If residue is limited to missing read-only snapshot references, the default mode emits a clearly marked best-effort source; use `--strict` to reject it. Use `--resume` to persist and reuse validated batch results through `recovery-manifest.json`. Use `--emit functions`, `--emit callgraph`, `--emit tree`, `--emit names`, or `--emit serialized` for analysis outputs under `.analysis/`.

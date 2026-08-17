@@ -26,7 +26,7 @@ test('round-trips a validated recovery artifact', () => {
     });
     fs.writeFileSync(file, serializeRecoveryArtifact(artifact), 'utf8');
     assert.deepEqual(readRecoveryArtifact(file), artifact);
-    assert.equal(parseRecoveryArtifact(artifact).kind, 'v8blob-to-js-recovery');
+    assert.equal(parseRecoveryArtifact(artifact).kind, 'v8bytecode-recover-recovery');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -35,10 +35,18 @@ test('round-trips a validated recovery artifact', () => {
 test('rejects untrusted or incomplete artifact shapes', () => {
   assert.throws(
     () => parseRecoveryArtifact({ kind: 'other', format: 1, source: 'x' }),
-    /not a supported v8blob-to-js-recovery format/,
+    /not a supported v8bytecode-recover-recovery format/,
   );
   assert.throws(
-    () => parseRecoveryArtifact({ kind: 'v8blob-to-js-recovery', format: 1 }),
+    () => parseRecoveryArtifact({ kind: 'v8bytecode-recover-recovery', format: 1 }),
     /does not contain recovered source/,
   );
+});
+
+test('reads legacy recovery artifacts after the project rename', () => {
+  assert.equal(parseRecoveryArtifact({
+    kind: 'v8blob-to-js-recovery',
+    format: 1,
+    source: 'const legacy = true;\n',
+  }).kind, 'v8blob-to-js-recovery');
 });

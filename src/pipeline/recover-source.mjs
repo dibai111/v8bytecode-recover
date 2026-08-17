@@ -335,7 +335,7 @@ function recoverSources(options, paths, backend) {
   );
   removeLegacyArtifacts(options.output, [options.input], { preserveAnalysis: canResume });
 
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-to-js-'));
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'v8bytecode-recover-'));
   const startedAt = new Date();
   const files = [];
   let manifest = options.resume

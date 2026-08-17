@@ -112,7 +112,7 @@ function Start-V8BlobMenu {
     while ($true) {
         Write-Host ''
         Write-Host '========================================' -ForegroundColor Cyan
-        Write-Host '        v8blob-to-js PowerShell tool' -ForegroundColor Cyan
+        Write-Host '        v8bytecode-recover PowerShell tool' -ForegroundColor Cyan
         Write-Host '========================================' -ForegroundColor Cyan
         Write-Host '1. Quick recover (auto-detect, sensible defaults)'
         Write-Host '2. Inspect blob, V8 profile, and snapshot'

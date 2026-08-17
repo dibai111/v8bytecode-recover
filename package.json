@@ -1,14 +1,14 @@
 {
-  "name": "v8blob-to-js",
-  "version": "0.7.0",
+  "name": "v8bytecode-recover",
+  "version": "0.8.0",
   "description": "PowerShell-first recovery and analysis toolkit for V8 cached bytecode.",
   "type": "module",
   "bin": {
-    "v8blob-to-js": "bin/v8blob-to-js.mjs",
-    "v8blob-benchmark": "bin/v8blob-benchmark.mjs",
-    "v8blob-profiles": "bin/v8blob-profiles.mjs",
-    "v8blob-inspect": "bin/v8blob-inspect.mjs",
-    "v8blob-doctor": "bin/v8blob-doctor.mjs"
+    "v8bytecode-recover": "bin/v8bytecode-recover.mjs",
+    "v8bytecode-benchmark": "bin/v8bytecode-benchmark.mjs",
+    "v8bytecode-profiles": "bin/v8bytecode-profiles.mjs",
+    "v8bytecode-inspect": "bin/v8bytecode-inspect.mjs",
+    "v8bytecode-doctor": "bin/v8bytecode-doctor.mjs"
   },
   "files": [
     "bin/",
@@ -17,17 +17,17 @@
     "engine/v8asm/cached_data/",
     "engine/v8asm/source_recovery/",
     "powershell/",
-    "v8blob-to-js.ps1",
+    "v8bytecode-recover.ps1",
     "assets/readme/"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "check": "node --check bin/v8blob-to-js.mjs && node --check bin/v8blob-benchmark.mjs && node --check bin/v8blob-profiles.mjs && node --check bin/v8blob-inspect.mjs && node --check bin/v8blob-doctor.mjs",
+    "check": "node --check bin/v8bytecode-recover.mjs && node --check bin/v8bytecode-benchmark.mjs && node --check bin/v8bytecode-profiles.mjs && node --check bin/v8bytecode-inspect.mjs && node --check bin/v8bytecode-doctor.mjs",
     "test": "node --test",
-    "profiles:validate": "node bin/v8blob-profiles.mjs validate",
-    "profiles:list": "node bin/v8blob-profiles.mjs list"
+    "profiles:validate": "node bin/v8bytecode-profiles.mjs validate",
+    "profiles:list": "node bin/v8bytecode-profiles.mjs list"
   },
   "keywords": [
     "v8",

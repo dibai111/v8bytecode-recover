@@ -69,18 +69,18 @@ function Invoke-V8Action {
     $entryPoint = $null
 
     switch ($Action) {
-        'recover' { $entryPoint = 'bin/v8blob-to-js.mjs' }
-        'disassemble' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('disassembly') }
-        'translated' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('translated') }
-        'cfg' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('cfg') }
-        'functions' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('functions') }
-        'callgraph' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('callgraph') }
-        'tree' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('tree') }
-        'names' { $entryPoint = 'bin/v8blob-to-js.mjs'; $Emit = @('names') }
-        'inspect' { $entryPoint = 'bin/v8blob-inspect.mjs' }
-        'profiles' { $entryPoint = 'bin/v8blob-profiles.mjs'; [void]$nodeArguments.Add($ProfileCommand) }
-        'benchmark' { $entryPoint = 'bin/v8blob-benchmark.mjs' }
-        'doctor' { $entryPoint = 'bin/v8blob-doctor.mjs' }
+        'recover' { $entryPoint = 'bin/v8bytecode-recover.mjs' }
+        'disassemble' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('disassembly') }
+        'translated' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('translated') }
+        'cfg' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('cfg') }
+        'functions' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('functions') }
+        'callgraph' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('callgraph') }
+        'tree' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('tree') }
+        'names' { $entryPoint = 'bin/v8bytecode-recover.mjs'; $Emit = @('names') }
+        'inspect' { $entryPoint = 'bin/v8bytecode-inspect.mjs' }
+        'profiles' { $entryPoint = 'bin/v8bytecode-profiles.mjs'; [void]$nodeArguments.Add($ProfileCommand) }
+        'benchmark' { $entryPoint = 'bin/v8bytecode-benchmark.mjs' }
+        'doctor' { $entryPoint = 'bin/v8bytecode-doctor.mjs' }
     }
 
     if ($Action -in @('recover', 'disassemble', 'translated', 'cfg', 'functions', 'callgraph', 'tree', 'names', 'inspect', 'benchmark') -and [string]::IsNullOrWhiteSpace($InputPath)) {

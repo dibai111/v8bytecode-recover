@@ -4,7 +4,7 @@ function usage() {
   console.log(`V8 cached bytecode to JavaScript
 
 Usage:
-  node bin/v8blob-to-js.mjs <blob-or-directory> [options]
+  node bin/v8bytecode-recover.mjs <blob-or-directory> [options]
 
 Options:
   -o, --output <dir>       Output directory (default: output)

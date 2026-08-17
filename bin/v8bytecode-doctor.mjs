@@ -19,7 +19,7 @@ function parseArguments(argv) {
 }
 
 function usage() {
-  console.log(`Usage: node bin/v8blob-doctor.mjs [--json] [--python <exe>] [--d8 <path>]`);
+  console.log(`Usage: node bin/v8bytecode-doctor.mjs [--json] [--python <exe>] [--d8 <path>]`);
 }
 
 function main(argv = process.argv.slice(2)) {

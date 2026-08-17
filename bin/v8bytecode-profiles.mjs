@@ -8,7 +8,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const engineRoot = path.join(root, 'engine', 'v8asm');
 const command = process.argv[2] ?? 'validate';
 if (!['validate', 'list'].includes(command)) {
-  throw new Error('Usage: v8blob-profiles [validate|list]');
+  throw new Error('Usage: v8bytecode-profiles [validate|list]');
 }
 const run = spawnSync('python', ['-B', '-m', 'cached_data.profile_cli', command], {
   cwd: engineRoot,

@@ -1,7 +1,7 @@
 const readOnlyReferencePattern = /<read_only_(\d+),(\d+)>/g;
 const readOnlyResidueFields = new Set(['unresolvedObjects', 'unresolvedHeapValues']);
 
-const partialRecoveryBanner = '// v8blob-to-js: best-effort recovery; unresolved read-only V8 references use stable placeholders.';
+const partialRecoveryBanner = '// v8bytecode-recover: best-effort recovery; unresolved read-only V8 references use stable placeholders.';
 
 function isReadOnlyOnlyResidue(metrics) {
   const hasReadOnlyResidue = [...readOnlyResidueFields]

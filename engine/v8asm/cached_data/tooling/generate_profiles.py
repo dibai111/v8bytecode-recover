@@ -118,7 +118,7 @@ class GitHubRawProvider(SourceProvider):
             return cache_path.read_text(encoding="utf-8")
         url = f"https://raw.githubusercontent.com/{self.repository}/{version}/{path}"
         request = urllib.request.Request(
-            url, headers={"User-Agent": "v8blob-to-js-profile-generator"}
+            url, headers={"User-Agent": "v8bytecode-recover-profile-generator"}
         )
         for attempt in range(3):
             try:
@@ -681,7 +681,7 @@ def main() -> int:
     parser.add_argument("--v8-repo", type=Path)
     parser.add_argument("--github-repository", default="v8/v8")
     parser.add_argument(
-        "--cache-dir", type=Path, default=Path.home() / ".cache" / "v8blob-to-js"
+            "--cache-dir", type=Path, default=Path.home() / ".cache" / "v8bytecode-recover"
     )
     parser.add_argument("--version", action="append", dest="versions")
     parser.add_argument("--versions-file", type=Path)

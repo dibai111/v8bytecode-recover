@@ -43,5 +43,5 @@ test('allows partial recovery only when read-only residue is the sole quality is
 
   assert.equal(isReadOnlyOnlyResidue(partial), true);
   assert.equal(isReadOnlyOnlyResidue(unsafe), false);
-  assert.match(partialRecoveryBanner, /^\/\/ v8blob-to-js:/);
+  assert.match(partialRecoveryBanner, /^\/\/ v8bytecode-recover:/);
 });

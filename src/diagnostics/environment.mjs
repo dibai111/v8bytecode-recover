@@ -62,7 +62,7 @@ function inspectEnvironment({ engineRoot, python = 'python', d8Path = null }) {
 function renderEnvironment(report) {
   const mark = (value) => value ? 'OK' : 'FAIL';
   return [
-    'v8blob-to-js 系統檢查',
+    'v8bytecode-recover 系統檢查',
     '',
     `平台: ${report.platform}`,
     `[${mark(report.node.available)}] Node.js ${report.node.version}`,

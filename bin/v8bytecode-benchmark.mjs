@@ -23,7 +23,7 @@ function parseArguments(argv) {
     else if (!argument.startsWith('-') && !options.input) options.input = path.resolve(argument);
     else throw new Error(`Unexpected benchmark argument: ${argument}`);
   }
-  if (!options.input) throw new Error('Usage: v8blob-benchmark INPUT [--backends profile,d8]');
+  if (!options.input) throw new Error('Usage: v8bytecode-benchmark INPUT [--backends profile,d8]');
   for (const backend of options.backends) {
     if (!['profile', 'd8'].includes(backend)) throw new Error(`Unknown backend: ${backend}`);
   }
@@ -31,7 +31,7 @@ function parseArguments(argv) {
 }
 
 const options = parseArguments(process.argv.slice(2));
-const entryPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'v8blob-to-js.mjs');
+  const entryPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'v8bytecode-recover.mjs');
 const report = benchmark(entryPath, options.input, options.backends, options);
 const serialized = `${JSON.stringify(report, null, 2)}\n`;
 if (options.output) {

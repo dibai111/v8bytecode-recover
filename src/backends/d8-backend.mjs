@@ -4,14 +4,17 @@ import path from 'node:path';
 import { runProcess, runPython } from '../runtime/processes.mjs';
 
 function resolveD8Path(requestedPath) {
-  const candidate = requestedPath || process.env.V8BLOB_D8 || null;
+  const candidate = requestedPath
+    || process.env.V8BYTECODE_D8
+    || process.env.V8BLOB_D8
+    || null;
   if (!candidate) return null;
   return path.resolve(candidate);
 }
 
 function assertD8Path(d8Path) {
   if (!d8Path) {
-    throw new Error('The d8 backend requires --d8 PATH or V8BLOB_D8');
+    throw new Error('The d8 backend requires --d8 PATH, V8BYTECODE_D8, or legacy V8BLOB_D8');
   }
   if (!fs.existsSync(d8Path)) throw new Error(`d8 executable does not exist: ${d8Path}`);
 }

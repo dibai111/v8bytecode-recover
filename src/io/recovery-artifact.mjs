@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const recoveryArtifactKind = 'v8blob-to-js-recovery';
+const recoveryArtifactKind = 'v8bytecode-recover-recovery';
+const legacyRecoveryArtifactKind = 'v8blob-to-js-recovery';
 const recoveryArtifactFormat = 1;
 
 function createRecoveryArtifact({
@@ -37,7 +38,8 @@ function parseRecoveryArtifact(value, sourceName = 'recovery artifact') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${sourceName} must contain a JSON object`);
   }
-  if (value.kind !== recoveryArtifactKind || value.format !== recoveryArtifactFormat) {
+  if (![recoveryArtifactKind, legacyRecoveryArtifactKind].includes(value.kind)
+    || value.format !== recoveryArtifactFormat) {
     throw new Error(
       `${sourceName} is not a supported ${recoveryArtifactKind} format (expected ${recoveryArtifactFormat})`,
     );
@@ -69,5 +71,6 @@ export {
   readRecoveryArtifact,
   recoveryArtifactFormat,
   recoveryArtifactKind,
+  legacyRecoveryArtifactKind,
   serializeRecoveryArtifact,
 };

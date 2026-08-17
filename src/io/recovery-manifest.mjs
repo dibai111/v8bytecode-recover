@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const recoveryManifestKind = 'v8blob-to-js-manifest';
+const recoveryManifestKind = 'v8bytecode-recover-manifest';
+const legacyRecoveryManifestKind = 'v8blob-to-js-manifest';
 const recoveryManifestFormat = 1;
 const recoveryPipelineVersion = 1;
 const recoveryManifestFileName = 'recovery-manifest.json';
@@ -89,7 +90,8 @@ function createRecoveryManifest({ inputRoot, outputRoot, options, startedAt = ne
 
 function parseRecoveryManifest(value) {
   if (!value || typeof value !== 'object') return null;
-  if (value.kind !== recoveryManifestKind || value.format !== recoveryManifestFormat) return null;
+  if (![recoveryManifestKind, legacyRecoveryManifestKind].includes(value.kind)
+    || value.format !== recoveryManifestFormat) return null;
   if (!Array.isArray(value.entries)) return null;
   if (typeof value.inputRoot !== 'string' || typeof value.outputRoot !== 'string') return null;
   if (typeof value.settingsFingerprint !== 'string') return null;
@@ -154,6 +156,7 @@ export {
   recoveryManifestFileName,
   recoveryManifestFormat,
   recoveryManifestKind,
+  legacyRecoveryManifestKind,
   recoveryPipelineVersion,
   recoverySettings,
   recoverySettingsFingerprint,

@@ -37,7 +37,7 @@ test('inspects disassembly and recovery artifacts with automatic format detectio
   try {
     fs.writeFileSync(path.join(root, 'sample.disassembly.txt'), 'Bytecode\nreturn\n', 'utf8');
     fs.writeFileSync(path.join(root, 'sample.v8recovery.json'), JSON.stringify({
-      kind: 'v8blob-to-js-recovery',
+      kind: 'v8bytecode-recover-recovery',
       format: 1,
       source: 'function sample() {}\n',
     }), 'utf8');

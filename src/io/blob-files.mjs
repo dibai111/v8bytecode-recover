@@ -122,12 +122,15 @@ function containsPath(parentPath, childPath) {
 }
 
 function removeLegacyArtifacts(outputPath, protectedPaths = [], options = {}) {
-  const reportPath = path.join(outputPath, 'V8BLOB_TO_JS_REPORT.json');
+  const reportPaths = [
+    path.join(outputPath, 'V8BYTECODE_RECOVER_REPORT.json'),
+    path.join(outputPath, 'V8BLOB_TO_JS_REPORT.json'),
+  ];
   const recoveryReportPath = path.join(outputPath, 'recovery-report.json');
   const evidencePath = path.join(outputPath, '.evidence');
   const analysisPath = path.join(outputPath, '.analysis');
   const targets = [
-    [reportPath, false],
+    ...reportPaths.map((reportPath) => [reportPath, false]),
     [recoveryReportPath, false],
     [evidencePath, true],
     [analysisPath, true, options.preserveAnalysis === true],

@@ -9,7 +9,7 @@ function usage() {
   console.log(`V8 Blob 診斷工具
 
 Usage:
-  node bin/v8blob-inspect.mjs <blob-or-directory> [--json]
+  node bin/v8bytecode-inspect.mjs <blob-or-directory> [--json]
 
 功能:
   顯示 raw blob 的大小、SHA-256、V8 version hash、內建 profile、header、payload

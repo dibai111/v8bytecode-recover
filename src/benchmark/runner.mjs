@@ -86,7 +86,7 @@ function compareBackends(results) {
 }
 
 function benchmark(entryPath, input, backends, options = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-benchmark-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8bytecode-benchmark-'));
   const results = [];
   try {
     for (const backend of backends) {
