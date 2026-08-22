@@ -65,6 +65,10 @@ function nearbySnapshotCandidates(blobPath) {
     if (parent === directory) break;
     directory = parent;
   }
+  // The running Node binary embeds its own read-only heap. For blobs produced
+  // by the same Node build it resolves `<read_only_...>` values; mismatched
+  // builds fail the checksum probe and are skipped like any other candidate.
+  addFileCandidate(process.execPath, candidates, seen);
   return candidates;
 }
 

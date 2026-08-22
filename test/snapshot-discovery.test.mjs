@@ -18,7 +18,7 @@ test('discovers a nearby versioned Node runtime as a legacy snapshot source', ()
     fs.writeFileSync(input, 'blob');
     fs.writeFileSync(nodePath, 'runtime');
 
-    assert.deepEqual(nearbySnapshotCandidates(input), [nodePath]);
+    assert.deepEqual(nearbySnapshotCandidates(input), [nodePath, process.execPath]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

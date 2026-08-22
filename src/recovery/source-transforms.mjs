@@ -188,12 +188,63 @@ function lowerTopLevelScriptScaffolding(source) {
   if (names.length > 0 && /\bscriptVar\d+\b/.test(lowered)) {
     const bodyLines = lowered.split('\n');
     const firstBodyLine = bodyLines.findIndex((line) => line.trim());
-    if (firstBodyLine >= 0) {
+    if (firstBodyLine === 0) {
+      // The anonymous script bootstrap was unwrapped; declarations sit at
+      // top level and must not carry the function-body indent.
+      bodyLines.splice(firstBodyLine, 0, `let ${names.join(', ')}`);
+    } else if (firstBodyLine > 0) {
       bodyLines.splice(firstBodyLine, 0, `  let ${names.join(', ')}`);
-      lowered = bodyLines.join('\n');
     }
+    lowered = bodyLines.join('\n');
   }
   return lowered;
+}
+
+function unwrapTopLevelScriptBootstrap(source) {
+  // V8 compiles a whole script file as a parameterless bootstrap function.
+  // When that anonymous wrapper is the first top-level block, holds no
+  // nested function declarations of its own scope beyond the recovered ones,
+  // and its body never touches `arguments` or `this`, the wrapper is pure
+  // scaffolding and its body can be inlined at top level.
+  const lines = source.split('\n');
+  const blocks = topLevelFunctionBlocks(lines);
+  const wrapper = blocks[0];
+  if (
+    !wrapper
+    || blocks.length < 1
+    || !/^function anonymous\(\) \{$/.test(wrapper.header)
+    || lines[wrapper.end]?.trim() !== '}'
+  ) {
+    return source;
+  }
+
+  const body = lines.slice(wrapper.start + 1, wrapper.end);
+  if (body.some((line) => /\b(?:arguments|this)\b/.test(
+    line.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g, ''),
+  ))) {
+    return source;
+  }
+  while (body.at(-1)?.trim() === '') body.pop();
+  // A top-level script's completion value is unobservable in recovered
+  // source, so return statements inside the wrapper become plain drops.
+  const unwrapped = [];
+  for (const rawLine of body) {
+    const line = rawLine.startsWith('  ') ? rawLine.slice(2) : rawLine;
+    const returned = line.trim().match(/^return (?:undefined\s*)?;?$/);
+    const valueReturn = line.trim().match(/^return (.+?);?$/);
+    if (returned) continue;
+    if (valueReturn) {
+      unwrapped.push(`${valueReturn[1]};`);
+      continue;
+    }
+    unwrapped.push(line);
+  }
+  // The wrapper's two-space indent leaks into inserted declarations; strip
+  // leading blank-indent lines so the top level starts clean.
+  while (unwrapped.length > 0 && unwrapped[0].trim() === '') unwrapped.shift();
+
+  lines.splice(wrapper.start, wrapper.end - wrapper.start + 1, ...unwrapped);
+  return lines.join('\n');
 }
 
 function unwrapCommonJsBootstrap(source) {
@@ -665,11 +716,57 @@ function lowerInternalHelperCalls(source) {
 
 function simplifyProvenBoundMethodCalls(source) {
   const ident = '[A-Za-z_$][\\w$]*';
-  const call = new RegExp(`\\((${ident}(?:\\.${ident})+)\\)\\.call\\((${ident}(?:\\.${ident})*),\\s*`, 'g');
-  return source.replace(call, (match, callee, receiver) => {
+  // `owner.method.call(owner, args)` is exactly `owner.method(args)`. The
+  // callee may appear bare or parenthesized.
+  const call = new RegExp(
+    `\\(?(${ident}(?:\\.${ident})+)\\)?\\.call\\((${ident}(?:\\.${ident})*),\\s*`,
+    'g',
+  );
+  const collapse = (text) => text.replace(call, (match, callee, receiver) => {
     const owner = callee.slice(0, callee.lastIndexOf('.'));
     return owner === receiver ? `${callee}(` : match;
   });
+
+  let lowered = collapse(source);
+  // V8 emits `CallProperty` as `callee.call(receiver, args)` where the callee
+  // register was loaded by a separate `receiver.method` line. When that
+  // definition is visible, substitute it so the call reads naturally.
+  const definition = new RegExp(`^\\s*(${ident})\\s*=\\s*(${ident}(?:\\.${ident})+)\\s*;?\\s*$`);
+  for (let pass = 0; pass < 20; pass += 1) {
+    const lines = lowered.split('\n');
+    const boundMethods = new Map();
+    for (const line of lines) {
+      const match = line.match(definition);
+      if (!match) continue;
+      const [, name, expression] = match;
+      const existing = boundMethods.get(name);
+      if (existing === undefined) boundMethods.set(name, expression);
+      else if (existing !== expression) boundMethods.set(name, null);
+    }
+    if (boundMethods.size === 0) break;
+
+    let changed = false;
+    const rewritten = lines.map((line) => {
+      if (/^\s*[A-Za-z_$][\w$]*\s*=/.test(line) && definition.test(line)) return line;
+      // `callee.call(receiver, args...)` with a proven `callee = owner.method`
+      // and owner === receiver reads as `owner.method(args...)`.
+      const pattern = new RegExp(
+        `\\b(${ident})\\.call\\((${ident}),\\s*([\\s\\S]*?)\\)`,
+        'g',
+      );
+      return line.replace(pattern, (match, name, receiver, rest) => {
+        const expression = boundMethods.get(name);
+        if (!expression) return match;
+        const owner = expression.slice(0, expression.lastIndexOf('.'));
+        if (owner !== receiver) return match;
+        changed = true;
+        return `${expression}(${rest})`;
+      });
+    });
+    lowered = collapse(rewritten.join('\n'));
+    if (!changed) break;
+  }
+  return lowered;
 }
 
 function legalizeSyntheticTemporaries(source) {
@@ -1592,6 +1689,39 @@ function removeSyntheticIdentityAssignments(source) {
     .join('\n');
 }
 
+function removeDeadSyntheticStores(source) {
+  // Synthetic registers (`temporaryN`) only exist to carry V8 accumulator or
+  // register state between translated lines. A dead store of a plain value
+  // reference is scaffolding; literals stay because storing them can document
+  // initialization, and calls/yields stay for obvious reasons.
+  const pureReference = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\[[^\]\()]+\])*$/;
+  const strippedStrings = (line) => (
+    line.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g, '')
+  );
+  const lines = source.split('\n');
+  for (let pass = 0; pass < 100; pass += 1) {
+    let changed = false;
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const match = lines[index].match(/^(\s*)(temporary\d+)\s*=\s*([^;]+?);?\s*$/);
+      if (!match) continue;
+      const [, , name, rawExpression] = match;
+      const expression = rawExpression.trim();
+      if (!pureReference.test(expression) || expression.includes('(')) continue;
+      if (/^(?:true|false|null|undefined|NaN|Infinity)$/.test(expression)) continue;
+
+      let consumed = false;
+      for (let probe = index + 1; probe < lines.length && !consumed; probe += 1) {
+        if (new RegExp(`\\b${name}\\b`).test(strippedStrings(lines[probe]))) consumed = true;
+      }
+      if (consumed) continue;
+      lines.splice(index, 1);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  return lines.join('\n');
+}
+
 function recoverGuardedLoopsWithProvenUpdates(source) {
   const lines = source.split('\n');
   for (let pass = 0; pass < 100; pass += 1) {
@@ -1795,6 +1925,7 @@ function normalizeDerivedSource(source) {
   lowered = removeResolvedContextScaffolding(lowered);
   lowered = recoverAsyncFunctions(lowered);
   lowered = removeInternalMetadataComments(lowered);
+  lowered = unwrapTopLevelScriptBootstrap(lowered);
   lowered = lowerTopLevelScriptScaffolding(lowered);
   lowered = dropResidualScriptContextHelpers(lowered);
   lowered = lowerInternalHelperCalls(lowered);
@@ -1811,6 +1942,7 @@ function normalizeDerivedSource(source) {
   lowered = recoverGuardedLoopsWithProvenUpdates(lowered);
   lowered = recoverResidualGuardedLoops(lowered);
   lowered = removeSyntheticIdentityAssignments(lowered);
+  lowered = removeDeadSyntheticStores(lowered);
   lowered = removeRedundantFunctionBindings(lowered);
   lowered = removeUnreachableStatements(lowered);
   lowered = lowerAsyncIteratorHelpers(lowered);
