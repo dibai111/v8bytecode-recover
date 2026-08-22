@@ -41,3 +41,19 @@ platform-specific, and must match the producer's V8 tag. You can also set
 `V8BYTECODE_D8` or pass `--d8` when the runtime lives elsewhere. When no local
 d8 exists, recovery can auto-download the exact matching release build (see the
 README's auto-download section); `runtime/` is git-ignored.
+
+## Resolve read-only heap values from a Node-produced blob
+
+Blobs compiled by `node --` (for example captured with `vm.Script` +
+`produceCachedData`) embed a read-only snapshot checksum. Passing the producing
+Node binary as the snapshot source lets the engine resolve read-only heap
+strings and objects instead of emitting `<read_only_...>` placeholders:
+
+```powershell
+node .\bin\v8bytecode-recover.mjs .\input\app.jsc `
+  -o .\output `
+  --snapshot "C:\Program Files\nodejs\node.exe"
+```
+
+Use the same Node major line that produced the blob; a mismatching binary
+fails the snapshot checksum check and the run falls back to placeholders.
