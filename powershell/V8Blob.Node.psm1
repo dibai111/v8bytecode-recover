@@ -9,6 +9,7 @@ function Invoke-V8NodeCommand {
         [Parameter(Mandatory = $true)]
         [string]$EntryPoint,
 
+        [AllowEmptyCollection()]
         [string[]]$Arguments = @()
     )
 

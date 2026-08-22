@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createRecoveryReport, sourceSummary } from '../src/reporting/recovery-report.mjs';
+import { createRecoveryReport, sourceSummary } from '../src/io/recovery-report.mjs';
 
 test('creates a compact recovery report with source metrics', () => {
   const source = 'function main() { return 1; }\n';

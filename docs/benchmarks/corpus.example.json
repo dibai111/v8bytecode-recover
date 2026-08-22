@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "description": "Copy this manifest and point paths at a private local corpus.",
+  "cases": [
+    {
+      "id": "node-v14-example",
+      "path": "node/v14/sample.jsc",
+      "backend": "profile",
+      "profile": "14.7.57",
+      "embedder": "node",
+      "minFunctions": 1,
+      "residueFree": true
+    }
+  ]
+}

@@ -65,6 +65,10 @@ test('writes a validated manifest with stable settings fingerprints', () => {
       recoverySettingsFingerprint(settings),
       recoverySettingsFingerprint(options({ level: 3 })),
     );
+    assert.notEqual(
+      recoverySettingsFingerprint(settings),
+      recoverySettingsFingerprint(options({ profileDirectory: 'profiles/14.7.57' })),
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

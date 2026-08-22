@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check JavaScript entry points
+        run: npm run check
+
+      - name: Run Node.js tests
+        run: npm test
+
+      - name: Run Python tests
+        run: python -m unittest discover engine/v8asm -p "test*.py"
+
+      - name: Validate bundled profiles
+        run: npm run profiles:validate
+
+      - name: Smoke-test PowerShell entry point
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\v8bytecode-recover.ps1 -Action doctor

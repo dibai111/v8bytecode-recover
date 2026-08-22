@@ -1644,7 +1644,25 @@
       "operands": []
     }
   ],
+  "cache_header_layout": {
+    "alignment": 8,
+    "base_size": 24,
+    "checksum_offsets": [
+      20
+    ],
+    "code_stub_key_count_offset": null,
+    "cpu_features_offset": null,
+    "external_reference_count_offset": null,
+    "flags_offset": 12,
+    "name": "legacy",
+    "payload_offset": 16,
+    "reservation_count_offset": null,
+    "ro_snapshot_offset": null,
+    "source_offset": 8,
+    "version_offset": 4
+  },
   "has_ro_snapshot_checksum": false,
+  "header_format": "legacy",
   "intrinsic_names": [
     "AsyncFunctionAwaitCaught",
     "AsyncFunctionAwaitUncaught",
@@ -3732,7 +3750,9 @@
     ]
   },
   "scope_info_layout": {
+    "context_count_slot": 3,
     "flags_encoding": "smi",
+    "flags_slot": 1,
     "function_variable_mask": 3,
     "function_variable_shift": 12,
     "inferred_function_name_bit": 14,
@@ -3750,15 +3770,22 @@
     "Backref": 4,
     "ClearedWeakReference": 21,
     "CodeBody": 27,
+    "DoubleAlignmentSentinel": 0,
     "EmbedderFieldsData": 14,
     "ExternalReference": 17,
+    "FirstEncodableFixedRawDataSize": 1,
+    "FirstEncodableRepeatCount": 2,
     "FixedRawData": 96,
+    "FixedRawDataCount": 32,
     "FixedRepeat": 128,
+    "FixedRepeatCount": 16,
     "HotObject": 144,
+    "HotObjectCount": 8,
     "InternalReference": 20,
     "NewMetaMap": 26,
     "NewObject": 0,
     "Nop": 10,
+    "NullRefSentinel": 0,
     "OffHeapBackingStore": 13,
     "OffHeapTarget": 23,
     "ReadOnlyHeapRef": 5,
@@ -3767,6 +3794,7 @@
     "ResolvePendingForwardRef": 25,
     "RootArray": 7,
     "RootArrayConstants": 64,
+    "RootArrayConstantsCount": 32,
     "SandboxedApiReference": 18,
     "SandboxedExternalReference": 19,
     "StartupObjectCache": 6,
@@ -3784,6 +3812,7 @@
     ]
   },
   "snapshot_spaces": 4,
+  "source_layout": "modern-torque",
   "static_root_area_start": null,
   "static_root_maps": {},
   "version": "9.4.146.24",

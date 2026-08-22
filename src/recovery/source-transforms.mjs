@@ -1,3 +1,5 @@
+import { recoverDelegatedAsyncGeneratorLoops } from './async-generator-transforms.mjs';
+
 const commonJsBindings = new Set(['exports', 'require', 'module', '__filename', '__dirname']);
 
 function unresolvedClosureBindings(source) {
@@ -9,8 +11,90 @@ function unresolvedClosureBindings(source) {
   return [...new Set(
     [...source.matchAll(/\bcreate_closure\(([A-Za-z_$][\w$]*)\)/g)]
       .map((match) => match[1])
-      .filter((name) => !declarations.has(name)),
+      // A closure over a named function that is also constructed or called
+      // elsewhere refers to a hoisted declaration of the original script; the
+      // recovered source keeps the reference, which stays valid JavaScript.
+      .filter((name) => !declarations.has(name))
+      .filter((name) => {
+        const usedElsewhere = new RegExp(`\\b(?:new\\s+${name}\\b|${name}\\s*\\()`)
+          .test(source.replace(new RegExp(`\\bcreate_closure\\(${name}\\)`, 'g'), ''));
+        return !usedElsewhere;
+      }),
   )].sort();
+}
+
+function lowerScriptContextBootstrap(source) {
+  // Top-level scripts wrap their body in an anonymous bootstrap that pushes a
+  // block context, binds hoisted closures/classes to registers, and stores
+  // them in script context slots. When the stored values name recovered
+  // functions or classes, the scaffolding is pure setup and can be removed.
+  if (!/\bcreate_block_context\(/.test(source)) return source;
+
+  const lines = source.split('\n');
+  const blockStart = lines.findIndex((line) => (
+    /^\s*[A-Za-z_$][\w$]* = pushContext\(create_block_context\(.*\)\)\s*$/.test(line)
+  ));
+  if (blockStart < 0) return source;
+
+  const registerNames = new Map();
+  for (let index = blockStart + 1; index < lines.length; index += 1) {
+    const binding = lines[index].match(
+      /^(\s*)([A-Za-z_$][\w$]*) = ([A-Za-z_$][\w$]*)\s*;?\s*$/,
+    );
+    if (binding && !commonJsBindings.has(binding[3])) {
+      registerNames.set(binding[2], binding[3]);
+    }
+  }
+  if (registerNames.size === 0) return source;
+
+  let cursor = blockStart + 1;
+  let slotsSeen = 0;
+  while (cursor < lines.length) {
+    // 'context = <register>' restores the parent context and is scaffolding,
+    // not a script slot; only script_context assignments carry values.
+    const slot = lines[cursor].match(
+      /^\s*script_context\[(\d+)\] = ([A-Za-z_$][\w$]*)\s*;?\s*$/,
+    );
+    if (slot) {
+      if (!registerNames.has(slot[2])) return source;
+      slotsSeen += 1;
+    }
+    cursor += 1;
+  }
+  if (slotsSeen === 0) return source;
+  for (const name of registerNames.values()) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return source;
+  }
+
+  const setupLines = new Set();
+  setupLines.add(blockStart);
+  for (let index = blockStart + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*[A-Za-z_$][\w$]* = ([A-Za-z_$][\w$]*)\s*;?\s*$/.test(line)
+      && !commonJsBindings.has(line.match(/=\s*([A-Za-z_$][\w$]*)/)?.[1] ?? '')) {
+      setupLines.add(index);
+      continue;
+    }
+    if (/^\s*(?:script_context\[\d+\]|context) = [A-Za-z_$][\w$]*\s*;?\s*$/.test(line)) {
+      setupLines.add(index);
+    }
+  }
+
+  const bodyLines = [];
+  for (let index = blockStart + 1; index < lines.length; index += 1) {
+    if (setupLines.has(index)) continue;
+    const line = lines[index];
+    if (/^\s*[A-Za-z_$][\w$]* = context\s*;?\s*$/.test(line)) continue;
+    if (/\bcontext\b/.test(line.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g, ''))) {
+      return source;
+    }
+    bodyLines.push(line);
+  }
+
+  return [
+    ...lines.slice(0, blockStart),
+    ...bodyLines,
+  ].join('\n');
 }
 
 function topLevelFunctionBlocks(lines) {
@@ -23,6 +107,71 @@ function topLevelFunctionBlocks(lines) {
     while (end > start && lines[end].trim() === '') end -= 1;
     return { start, end, header: lines[start] };
   });
+}
+
+function lowerTopLevelScriptScaffolding(source) {
+  const declaredFunctions = new Set(
+    [...source.matchAll(/^(?:async\s+)?function(?:\s*\*)?\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+      .map((match) => match[1]),
+  );
+
+  const lines = source.split('\n');
+  const slotExpressions = new Map();
+  for (const line of lines) {
+    const assignment = line.match(/^\s*script_context\[(\d+)\]\s*=\s*(.+?)\s*;?\s*$/);
+    if (!assignment) continue;
+    if (slotExpressions.has(assignment[1])) continue;
+    slotExpressions.set(assignment[1], assignment[2].trim());
+  }
+
+  let lowered = lines
+    .filter((line) => {
+      // DeclareGlobals only performs hoisting; the declared functions are
+      // already present as recovered function declarations.
+      if (/^\s*(?:[A-Za-z_$][\w$]*\s*=\s*)?DeclareGlobals\(/.test(line)) return false;
+      return true;
+    })
+    .join('\n');
+
+  lowered = lowerScriptContextBootstrap(lowered);
+
+  lowered = lowered.replace(
+    /^(\s*)script_context\[(\d+)\]\s*=\s*(.+?)\s*;?\s*$/gm,
+    (match, indent, slot, rawExpression) => {
+      const expression = stripBalancedOuterParentheses(rawExpression);
+      if (expression === 'HOLE') return '';
+      const identifier = expression.match(/^[A-Za-z_$][\w$]*$/)?.[0];
+      if (identifier && declaredFunctions.has(identifier)) return match;
+      return `${indent}scriptVar${slot} = ${expression}`;
+    },
+  );
+
+  const usedSlots = [...lowered.matchAll(/\bscriptVar(\d+)\b/g)].map((m) => m[1]);
+  const readSlots = [];
+  for (const match of lowered.matchAll(/\bcontext_slot\[(\d+)\]/g)) {
+    const expression = slotExpressions.get(match[1]);
+    if (expression !== undefined) readSlots.push(match[1]);
+  }
+  const declaredSlots = new Set([...usedSlots, ...readSlots]);
+
+  lowered = lowered.replace(/\bcontext_slot\[(\d+)\]/g, (match, slot) => {
+    const expression = slotExpressions.get(slot);
+    if (expression === undefined || expression === 'HOLE') return match;
+    return expression;
+  });
+
+  const names = [...declaredSlots].sort((left, right) => Number(left) - Number(right)).map(
+    (slot) => `scriptVar${slot}`,
+  );
+  if (names.length > 0 && /\bscriptVar\d+\b/.test(lowered)) {
+    const bodyLines = lowered.split('\n');
+    const firstBodyLine = bodyLines.findIndex((line) => line.trim());
+    if (firstBodyLine >= 0) {
+      bodyLines.splice(firstBodyLine, 0, `  let ${names.join(', ')}`);
+      lowered = bodyLines.join('\n');
+    }
+  }
+  return lowered;
 }
 
 function unwrapCommonJsBootstrap(source) {
@@ -273,12 +422,6 @@ function rewriteIdentifiersOutsideLiterals(source, rewrite) {
     index += 1;
   }
   return output;
-}
-
-function rewriteInternalHelperIdentifiers(source) {
-  return rewriteIdentifiersOutsideLiterals(source, (identifier) => {
-    return identifier;
-  });
 }
 
 function matchingParenthesis(text, openIndex) {
@@ -669,6 +812,44 @@ function recoverAsyncFunctions(source) {
         index += 5;
         continue;
       }
+
+      // Some V8 versions place a context/register save between the suspend
+      // marker and ResumeGenerator. Keep those setup statements and lower
+      // only the resume protocol to a native await expression.
+      let resumeIndex = index + 2;
+      let extendedResume = null;
+      while (resumeIndex < Math.min(lines.length, index + 8)) {
+        extendedResume = lines[resumeIndex]?.trim().match(
+          /^((?:r\d+|temporary\d+))\s*=\s*ResumeGenerator\(([^)]+)\)$/,
+        );
+        if (extendedResume) break;
+        resumeIndex += 1;
+      }
+      const extendedGuard = lines[resumeIndex + 1]?.trim() ?? '';
+      const extendedThrown = lines[resumeIndex + 2]?.trim() ?? '';
+      const extendedClose = lines[resumeIndex + 3]?.trim() ?? '';
+      const bridge = lines.slice(index + 1, resumeIndex);
+      const usesResume = lines
+        .slice(resumeIndex + 4, Math.min(lines.length, resumeIndex + 8))
+        .some((nextLine) => new RegExp(`\\b${extendedResume?.[1] ?? 'never'}\\b`).test(nextLine));
+      if (
+        extendedResume
+        && bridge.some((bridgeLine) => /^\s*\/\/ SuspendGenerator\b/.test(bridgeLine))
+        && extendedResume[2].trim() === awaitedGenerator
+        && /^if \(.+\) \{$/.test(extendedGuard)
+        && extendedGuard.includes(`GeneratorGetResumeMode(${awaitedGenerator})`)
+        && extendedThrown === `throw ${extendedResume[1]}`
+        && extendedClose === '}'
+        && usesResume
+      ) {
+        const expression = stripBalancedOuterParentheses(awaitCall[3]);
+        recovered.push(
+          ...bridge.filter((bridgeLine) => !/^\s*\/\/ SuspendGenerator\b/.test(bridgeLine)),
+        );
+        recovered.push(`${awaitCall[1]}${extendedResume[1]} = await ${expression}`);
+        index = resumeIndex + 3;
+        continue;
+      }
     }
     recovered.push(line);
   }
@@ -676,6 +857,212 @@ function recoverAsyncFunctions(source) {
   return recovered.join('\n')
     .replace(/\breturn\s+AsyncFunctionResolve\([^,]+,\s*([^\n]+)\)/g, 'return $1')
     .replace(/\breturn\s+AsyncFunctionReject\([^,]+,\s*([^\n]+)\)/g, 'throw $1');
+}
+
+function emptyConditionalEnd(lines, start) {
+  const condition = lines[start]?.trim().match(/^if\s*\((.+)\)\s*\{\s*$/);
+  if (!condition) return null;
+  const thenEnd = endOfBlockBeforeElse(lines, start);
+  if (thenEnd === null || lines.slice(start + 1, thenEnd).some((line) => line.trim())) return null;
+  let next = thenEnd + 1;
+  while (next < lines.length && !lines[next].trim()) next += 1;
+  if (lines[next]?.trim() !== 'else {') return thenEnd;
+  const end = endOfConditional(lines, start);
+  if (end === null) return null;
+  const elseStart = next;
+  if (lines.slice(elseStart + 1, end).some((line) => line.trim())) return null;
+  return end;
+}
+
+function parseSentinelLoopCondition(line) {
+  const match = line?.trim().match(/^while\s*\((.+)\)\s*\{\s*$/);
+  if (!match) return null;
+  const expression = stripBalancedOuterParentheses(match[1]);
+  const direct = expression.match(/^([A-Za-z_$][\w$]*)\s*==\s*(.+)$/);
+  if (direct && stripBalancedOuterParentheses(direct[2]) === '1') return { flag: direct[1] };
+
+  const parts = splitTopLevelArguments(expression);
+  if (parts.length !== 2) return null;
+  const initializer = parts[0].match(/^([A-Za-z_$][\w$]*)\s*=\s*1$/);
+  if (!initializer || initializer[1] !== parts[1].match(/^([A-Za-z_$][\w$]*)\s*=/)?.[1]) return null;
+  const second = parts[1].match(/^([A-Za-z_$][\w$]*)\s*=\s*(.+)$/);
+  if (!second || second[1] !== initializer[1]) return null;
+  const comparison = stripBalancedOuterParentheses(second[2]).match(
+    /^([A-Za-z_$][\w$]*)\s*==\s*([A-Za-z_$][\w$]*)$/,
+  );
+  if (!comparison || ![comparison[1], comparison[2]].includes(initializer[1])) return null;
+  const flag = comparison[1] === initializer[1] ? comparison[2] : comparison[1];
+  return { flag };
+}
+
+function recoverSentinelIndexLoops(source) {
+  const lines = source.split('\n');
+  for (let pass = 0; pass < 100; pass += 1) {
+    let changed = false;
+    for (let start = 0; start < lines.length; start += 1) {
+      const loop = lines[start].match(/^(\s*)while\s*\(\s*true\s*\)\s*\{\s*$/);
+      if (!loop) continue;
+      const outerEnd = endOfConditional(lines, start);
+      if (outerEnd === null) continue;
+
+      let cursor = start + 1;
+      while (cursor < outerEnd && !lines[cursor].trim()) cursor += 1;
+      const indexAssignment = lines[cursor]?.trim().match(
+        /^([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*$/,
+      );
+      if (!indexAssignment) continue;
+      const [, indexName, seedName] = indexAssignment;
+      if (indexName === seedName) continue;
+
+      const firstGuard = lines[cursor + 1]?.trim().match(/^if\s*\((.+)\)\s*\{\s*$/);
+      if (!firstGuard) continue;
+      const firstExpression = stripBalancedOuterParentheses(firstGuard[1]);
+      const firstMatch = firstExpression.match(/^([A-Za-z_$][\w$]*)\s*==\s*1$/);
+      if (!firstMatch) continue;
+      const firstEnd = endOfBlockBeforeElse(lines, cursor + 1);
+      const firstBody = firstEnd === null
+        ? []
+        : lines.slice(cursor + 2, firstEnd).map((line) => line.trim()).filter(Boolean);
+      if (firstEnd === null || firstBody.length !== 1 || firstBody[0] !== `${firstMatch[1]} = 0`) continue;
+      if (lines[firstEnd + 1]?.trim() !== 'else {') continue;
+      const firstConditionalEnd = endOfConditional(lines, cursor + 1);
+      if (firstConditionalEnd === null) continue;
+      const firstElseBody = lines.slice(firstEnd + 2, firstConditionalEnd)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (firstElseBody.length !== 1) continue;
+      const increment = firstElseBody[0].match(
+        new RegExp(`^${indexName}\\s*(?:\\+=\\s*1|=\\s*\\(\\s*${indexName}\\s*\\+\\s*1\\s*\\))$`),
+      );
+      if (!increment) continue;
+
+      cursor = firstConditionalEnd + 1;
+      while (cursor < outerEnd && !lines[cursor].trim()) cursor += 1;
+      const flagAssignment = lines[cursor]?.trim().match(
+        /^([A-Za-z_$][\w$]*)\s*=\s*1\s*;?$/,
+      );
+      if (!flagAssignment) continue;
+      const flagName = flagAssignment[1];
+      cursor += 1;
+      const conditionAssignment = lines[cursor]?.trim().match(
+        /^([A-Za-z_$][\w$]*)\s*=\s*(.+?)\s*;?$/,
+      );
+      if (!conditionAssignment) continue;
+      const conditionName = conditionAssignment[1];
+      const condition = stripBalancedOuterParentheses(conditionAssignment[2]);
+      cursor += 1;
+      const conditionEnd = emptyConditionalEnd(lines, cursor);
+      if (conditionEnd === null) continue;
+
+      let innerStart = conditionEnd + 1;
+      while (innerStart < outerEnd && !lines[innerStart].trim()) innerStart += 1;
+      const innerCondition = parseSentinelLoopCondition(lines[innerStart]);
+      if (!innerCondition || innerCondition.flag !== flagName) continue;
+      const innerEnd = endOfConditional(lines, innerStart);
+      if (innerEnd === null || innerEnd >= outerEnd) continue;
+
+      let trailingStart = innerEnd + 1;
+      while (trailingStart < outerEnd && !lines[trailingStart].trim()) trailingStart += 1;
+      const trailingEnd = emptyConditionalEnd(lines, trailingStart);
+      if (
+        trailingEnd === null
+        || lines.slice(trailingEnd + 1, outerEnd).some((line) => line.trim())
+      ) continue;
+
+      const body = lines.slice(innerStart + 1, innerEnd);
+      const flagResetIndex = body.findIndex((line) => line.trim() === `${flagName} = 0`);
+      const seedUpdateIndex = body.findIndex((line) => line.trim() === `${seedName} = ${indexName}`);
+      if (flagResetIndex < 0 || seedUpdateIndex < 0) continue;
+      if (body.some((line, index) => {
+        if (index === flagResetIndex || index === seedUpdateIndex) return false;
+        return new RegExp(`\\b${flagName}\\b`).test(line);
+      })) continue;
+      if (body.some((line) => new RegExp(`\\b${firstMatch[1]}\\b`).test(line))) continue;
+
+      const bodyWithoutControl = body.filter((line, index) => (
+        index !== flagResetIndex && index !== seedUpdateIndex
+      ));
+      if (!bodyWithoutControl.some((line) => line.trim())) continue;
+
+      const loopIndent = loop[1];
+      const innerIndent = lines[innerStart].match(/^\s*/)?.[0] ?? '';
+      const dedent = Math.max(0, innerIndent.length - loopIndent.length);
+      const recoveredBody = bodyWithoutControl.map((line) => (
+        line.trim() ? line.slice(Math.min(dedent, line.length)) : line
+      ));
+      const recovered = [
+        `${loopIndent}for (${indexName} = ${seedName}; ${condition}; ${indexName} += 1) {`,
+        ...recoveredBody,
+        `${loopIndent}}`,
+        `${loopIndent}${firstMatch[1]} = 0`,
+      ];
+      lines.splice(start, outerEnd - start + 1, ...recovered);
+      changed = true;
+      break;
+    }
+    if (!changed) break;
+  }
+  return lines.join('\n');
+}
+
+function recoverRawLexerLoops(source) {
+  const lines = source.split('\n');
+  for (let start = 0; start < lines.length; start += 1) {
+    if (!/^\s*try\s*\{\s*$/.test(lines[start])) continue;
+    const tryEnd = endOfConditional(lines, start);
+    if (tryEnd === null) continue;
+    const catchStart = lines.findIndex((line, index) => (
+      index > start && index < tryEnd && /^\s*\}\s*catch\s*\([^)]*\)\s*\{\s*$/.test(line)
+    ));
+    if (catchStart < 0) continue;
+    const rawGotoIndex = lines.findIndex((line, index) => (
+      index > start && index < catchStart && /^\s*if\s*\(.+\)\s*goto offset_\d+\s*$/.test(line)
+    ));
+    if (rawGotoIndex < 0) continue;
+
+    const read = lines[start + 1]?.trim().match(
+      /^([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\.next\(\)\s*;?$/,
+    );
+    const emptyGuard = lines[start + 2]?.trim().match(/^if\s*\(!\((.+)\)\)\s*\{\s*$/);
+    if (!read || !emptyGuard || emptyGuard[1].trim() !== read[1]) continue;
+    const emptyGuardEnd = endOfBlockBeforeElse(lines, start + 2);
+    if (emptyGuardEnd === null || lines.slice(start + 3, emptyGuardEnd).some((line) => line.trim())) continue;
+    if (lines[emptyGuardEnd + 1]?.trim() !== 'else {') continue;
+    const elseEnd = endOfConditional(lines, start + 2);
+    if (elseEnd === null || rawGotoIndex >= elseEnd) continue;
+    const receiver = read[2];
+    const elseBody = lines.slice(emptyGuardEnd + 2, elseEnd).map((line) => line.trim()).filter(Boolean);
+    if (elseBody.some((line) => (
+      line !== lines[rawGotoIndex].trim()
+      && !new RegExp(`^[A-Za-z_$][\\w$]*\\s*=\\s*${receiver}\\.next\\(\\)\\s*;?$`).test(line)
+    ))) continue;
+
+    const incrementIndex = lines.findIndex((line, index) => (
+      index > catchStart && index < lines.length
+      && /^\s*this\.current\s*=\s*\(this\.current\s*\+\s*1\)\s*;?\s*$/.test(line)
+    ));
+    const resultsIndex = lines.findIndex((line, index) => (
+      index > incrementIndex && /^\s*this\.results\s*=\s*this\.finish\(\)\s*;?\s*$/.test(line)
+    ));
+    if (incrementIndex < 0 || resultsIndex < 0) continue;
+
+    const indent = lines[start].match(/^\s*/)?.[0] ?? '';
+    const shifted = (line) => (line.trim() ? `  ${line}` : line);
+    const catchBlock = lines.slice(catchStart, tryEnd + 1).map(shifted);
+    const processing = lines.slice(tryEnd + 1, incrementIndex + 1).map(shifted);
+    const replacement = [
+      `${indent}for (;;) {`,
+      `${indent}  try {`,
+      `${indent}    ${read[1]} = ${receiver}.next()`,
+      `${indent}    if (!${read[1]}) break`,
+      ...catchBlock,
+      ...processing,
+      `${indent}}`,
+    ];
+    lines.splice(start, incrementIndex - start + 1, ...replacement);
+    break;
+  }
+  return lines.join('\n');
 }
 
 function removeInternalMetadataComments(source) {
@@ -989,6 +1376,200 @@ function recoverSharedJoinLeafBlocks(source) {
   return lines.join('\n');
 }
 
+function resolveTemporaryAssignments(expression, assignments) {
+  const values = new Map();
+  for (const assignment of assignments) {
+    let resolved = assignment.expression;
+    for (let pass = 0; pass < assignments.length + 2; pass += 1) {
+      const next = resolved.replace(/\btemporary\d+\b/g, (name) => {
+        const value = values.get(name);
+        return value === undefined ? name : `(${value})`;
+      });
+      if (next === resolved) break;
+      resolved = next;
+    }
+    values.set(assignment.name, resolved);
+  }
+  let resolved = expression;
+  for (let pass = 0; pass < assignments.length + 2; pass += 1) {
+    const next = resolved.replace(/\btemporary\d+\b/g, (name) => {
+      const value = values.get(name);
+      return value === undefined ? name : `(${value})`;
+    });
+    if (next === resolved) break;
+    resolved = next;
+  }
+  return resolved;
+}
+
+function hasLoopProgress(lines) {
+  return lines.some((line) => {
+    if (/\+\+|--|\+=|-=|\*=|\/=|\.(?:push|pop|shift|unshift|splice)\s*\(/.test(line)) {
+      return true;
+    }
+    if (/^\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*=\s*\(\1\s*[+-]\s*[^)]+\)\s*;?\s*$/.test(line)) {
+      return true;
+    }
+    const statement = line.trim();
+    return /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*\(/.test(statement);
+  });
+}
+
+function recoverGuardedLoopsWithConditionAssignments(source) {
+  const lines = source.split('\n');
+  for (let pass = 0; pass < 100; pass += 1) {
+    let changed = false;
+    for (let start = 0; start < lines.length; start += 1) {
+      const loop = lines[start].match(
+        /^(\s*)while\s*\(\s*(temporary\d+)\s*\)\s*\{\s*$/,
+      );
+      if (!loop) continue;
+      const outerEnd = endOfConditional(lines, start);
+      if (outerEnd === null) continue;
+
+      let cursor = start + 1;
+      while (cursor < outerEnd && !lines[cursor].trim()) cursor += 1;
+      const assignments = [];
+      while (cursor < outerEnd) {
+        const assignment = lines[cursor].trim().match(
+          /^(temporary\d+)\s*=\s*(.+?);?\s*$/,
+        );
+        if (!assignment) break;
+        assignments.push({ name: assignment[1], expression: assignment[2].trim() });
+        cursor += 1;
+      }
+      if (assignments.length < 2) continue;
+
+      const guard = lines[cursor]?.trim().match(
+        new RegExp(`^if\\s*\\(\\s*(\\!?)(?:\\(\\s*)?${loop[2]}(?:\\s*\\))?\\s*\\)\\s*\\{$`),
+      );
+      if (!guard) continue;
+      const innerEnd = endOfConditional(lines, cursor);
+      if (innerEnd === null || innerEnd >= outerEnd) continue;
+      if (lines.slice(innerEnd + 1, outerEnd).some((line) => line.trim())) continue;
+
+      const conditionIndex = assignments.map((item) => item.name).lastIndexOf(loop[2]);
+      if (conditionIndex <= 0) continue;
+      const conditionAssignment = assignments[conditionIndex];
+      if (!/[<>=!&|]/.test(conditionAssignment.expression)) continue;
+      const condition = resolveTemporaryAssignments(
+        conditionAssignment.expression,
+        assignments.slice(0, conditionIndex),
+      );
+      const body = lines.slice(cursor + 1, innerEnd);
+      if (!hasLoopProgress(body)) continue;
+
+      const loopIndent = loop[1];
+      const guardIndent = lines[cursor].match(/^\s*/)?.[0] ?? '';
+      const dedent = Math.max(0, guardIndent.length - loopIndent.length);
+      const recoveredCondition = guard[1] ? `!(${condition})` : condition;
+      const recoveredBody = body.map((line) => (
+        line.trim() ? line.slice(Math.min(dedent, line.length)) : line
+      ));
+      lines.splice(
+        start,
+        outerEnd - start + 1,
+        `${loopIndent}while (${recoveredCondition}) {`,
+        ...recoveredBody,
+        `${loopIndent}}`,
+      );
+      changed = true;
+      break;
+    }
+    if (!changed) break;
+  }
+  return lines.join('\n');
+}
+
+function recoverGuardedLoopsWithNestedCondition(source) {
+  const lines = source.split('\n');
+  for (let pass = 0; pass < 100; pass += 1) {
+    let changed = false;
+    for (let start = 0; start < lines.length; start += 1) {
+      const loop = lines[start].match(
+        /^(\s*)while\s*\(\s*(temporary\d+)\s*\)\s*\{\s*$/,
+      );
+      if (!loop) continue;
+
+      const outerEnd = endOfConditional(lines, start);
+      if (outerEnd === null) continue;
+      let conditionStart = start + 1;
+      while (conditionStart < outerEnd && !lines[conditionStart].trim()) conditionStart += 1;
+      const conditionMatch = lines[conditionStart]?.trim().match(
+        /^if\s*\((.+)\)\s*\{$/,
+      );
+      if (!conditionMatch) continue;
+
+      const conditionThenEnd = endOfBlockBeforeElse(lines, conditionStart);
+      if (
+        conditionThenEnd === null
+        || lines[conditionThenEnd + 1]?.trim() === 'else {'
+        || lines.slice(conditionThenEnd + 1, outerEnd).some((line) => line.trim())
+      ) continue;
+
+      let cursor = conditionStart + 1;
+      const assignments = [];
+      while (cursor < conditionThenEnd) {
+        const assignment = lines[cursor].trim().match(
+          /^(temporary\d+)\s*=\s*(.+?);?\s*$/,
+        );
+        if (!assignment) break;
+        assignments.push({ name: assignment[1], expression: assignment[2].trim() });
+        cursor += 1;
+      }
+      if (assignments.length < 2) continue;
+
+      const guard = lines[cursor]?.trim().match(
+        new RegExp(`^if\\s*\\(\\s*${loop[2]}\\s*\\)\\s*\\{$`),
+      );
+      if (!guard) continue;
+      const guardEnd = endOfBlockBeforeElse(lines, cursor);
+      if (
+        guardEnd === null
+        || lines[guardEnd + 1]?.trim() === 'else {'
+        || lines.slice(guardEnd + 1, conditionThenEnd).some((line) => line.trim())
+      ) continue;
+
+      const conditionIndex = assignments.map((item) => item.name).lastIndexOf(loop[2]);
+      if (conditionIndex <= 0) continue;
+      const resolvedCondition = resolveTemporaryAssignments(
+        assignments[conditionIndex].expression,
+        assignments.slice(0, conditionIndex),
+      );
+      if (!/[<>=!&|]/.test(resolvedCondition)) continue;
+
+      const body = lines.slice(cursor + 1, guardEnd);
+      if (body.length === 0 || !hasLoopProgress(body)) continue;
+
+      const loopIndent = loop[1];
+      const guardIndent = lines[cursor].match(/^\s*/)?.[0] ?? '';
+      const dedent = Math.max(0, guardIndent.length - loopIndent.length);
+      const recoveredBody = body.map((line) => (
+        line.trim() ? line.slice(dedent) : line
+      ));
+      const condition = `(${conditionMatch[1].trim()}) && (${resolvedCondition})`;
+      lines.splice(
+        start,
+        outerEnd - start + 1,
+        `${loopIndent}while (${condition}) {`,
+        ...recoveredBody,
+        `${loopIndent}}`,
+      );
+      changed = true;
+      break;
+    }
+    if (!changed) break;
+  }
+  return lines.join('\n');
+}
+
+function removeSyntheticIdentityAssignments(source) {
+  return source
+    .split('\n')
+    .filter((line) => !/^\s*(temporary\d+)\s*=\s*\1\s*;?\s*$/.test(line))
+    .join('\n');
+}
+
 function recoverGuardedLoopsWithProvenUpdates(source) {
   const lines = source.split('\n');
   for (let pass = 0; pass < 100; pass += 1) {
@@ -1041,6 +1622,104 @@ function recoverGuardedLoopsWithProvenUpdates(source) {
   return lines.join('\n');
 }
 
+function recoverResidualGuardedLoops(source) {
+  const lines = source.split('\n');
+  for (let pass = 0; pass < 100; pass += 1) {
+    let changed = false;
+    for (let start = 0; start < lines.length; start += 1) {
+      const shape = guardedLoopShape(lines, start);
+      if (!shape) continue;
+      const body = lines.slice(shape.innerStart + 1, shape.innerEnd);
+
+      const indent = lines[start].match(/^\s*/)?.[0] ?? '';
+      const innerIndent = lines[shape.innerStart].match(/^\s*/)?.[0] ?? '';
+      const dedent = Math.max(0, innerIndent.length - indent.length);
+      const recoveredBody = body.map((line) => (
+        line.trim() ? line.slice(Math.min(dedent, line.length)) : line
+      ));
+      if (body.every((line) => !line.trim())) {
+        lines.splice(
+          start,
+          shape.outerEnd - start + 1,
+          `${indent}if (${shape.condition}) {`,
+          `${indent}}`,
+        );
+        changed = true;
+        break;
+      }
+      if (!hasLoopProgress(body)) continue;
+      lines.splice(
+        start,
+        shape.outerEnd - start + 1,
+        `${indent}while (${shape.condition}) {`,
+        ...recoveredBody,
+        `${indent}}`,
+      );
+      changed = true;
+      break;
+    }
+    if (!changed) break;
+  }
+  return lines.join('\n');
+}
+
+function lowerResidualConstantLoops(source) {
+  return source.split('\n').map((line) => {
+    const match = line.match(/^(\s*)while\s*\(\s*([!()\s]*(?:true|false|0|1|null|undefined)[!()\s]*)\s*\)\s*\{$/);
+    if (!match) return line;
+    const expression = match[2].replace(/[()\s]/g, '');
+    const negations = (expression.match(/!/g) ?? []).length;
+    const value = expression.replaceAll('!', '');
+    const isAlwaysTrue = (value === 'true' || value === '1') === (negations % 2 === 0);
+    return isAlwaysTrue ? `${match[1]}for (;;) {` : `${match[1]}if (false) {`;
+  }).join('\n');
+}
+
+function removeRedundantFunctionBindings(source) {
+  const functionNames = new Set(
+    [...source.matchAll(/^(?:async\s+)?function(?:\s*\*)?\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+      .map((match) => match[1]),
+  );
+  if (functionNames.size === 0) return source;
+
+  return source.split('\n').filter((line) => {
+    const binding = line.match(/^let\s+([A-Za-z_$][\w$]*)\s*;?\s*$/);
+    if (binding && functionNames.has(binding[1])) return false;
+    const selfAssignment = line.match(
+      /^([A-Za-z_$][\w$]*)\s*=\s*\1\s*;?\s*$/,
+    );
+    return !(selfAssignment && functionNames.has(selfAssignment[1]));
+  }).join('\n');
+}
+
+function removeUnreachableStatements(source) {
+  const lines = source.split('\n');
+  const output = [];
+  let deadIndent = null;
+  for (const line of lines) {
+    const stripped = line.trim();
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+    if (deadIndent !== null && stripped) {
+      const isBoundary = indent < deadIndent
+        || (indent === deadIndent
+          && /^(?:function\b|async\s+function\b)/.test(stripped));
+      if (!isBoundary) continue;
+      deadIndent = null;
+    }
+    output.push(line);
+    if (/^\s*(?:return\b|throw\b)/.test(line)) deadIndent = indent;
+  }
+  return output.join('\n');
+}
+
+function lowerAsyncIteratorHelpers(source) {
+  return source.split('\n').map((line) => replaceHelperCallsOnLine(
+    line,
+    'CreateAsyncFromSyncIterator',
+    (argument) => `(async function* () { yield* ${argument} })()`,
+  )).join('\n');
+}
+
 function protectAutomaticSemicolonInsertion(source) {
   return source.split('\n').map((line) => {
     const stripped = line.trimStart();
@@ -1054,6 +1733,10 @@ function simplifyLowLevelExpressions(source) {
   let simplified = source.replace(
     /\bcreate_closure\(([A-Za-z_$][\w$]*)\)/g,
     '$1',
+  );
+  simplified = simplified.replace(
+    /\bcreate_closure\(\s*"<shared_function_info_map>"\s*\)/g,
+    'undefined',
   );
   simplified = unwrapCommonJsBootstrap(simplified);
 
@@ -1090,15 +1773,29 @@ function normalizeDerivedSource(source) {
   lowered = removeResolvedContextScaffolding(lowered);
   lowered = recoverAsyncFunctions(lowered);
   lowered = removeInternalMetadataComments(lowered);
+  lowered = lowerTopLevelScriptScaffolding(lowered);
   lowered = lowerInternalHelperCalls(lowered);
-  lowered = rewriteInternalHelperIdentifiers(lowered);
   lowered = simplifyProvenBoundMethodCalls(lowered);
   lowered = removeUnreferencedOrphanBytecodeFunctions(lowered);
   lowered = legalizeSyntheticTemporaries(lowered);
   lowered = nestCapturedFunctions(lowered);
+  lowered = recoverRawLexerLoops(lowered);
+  lowered = recoverSentinelIndexLoops(lowered);
   lowered = recoverSharedJoinLeafBlocks(lowered);
   lowered = recoverDuplicatedShortCircuitJoins(lowered);
+  lowered = recoverGuardedLoopsWithConditionAssignments(lowered);
+  lowered = recoverGuardedLoopsWithNestedCondition(lowered);
   lowered = recoverGuardedLoopsWithProvenUpdates(lowered);
+  lowered = recoverResidualGuardedLoops(lowered);
+  lowered = removeSyntheticIdentityAssignments(lowered);
+  lowered = removeRedundantFunctionBindings(lowered);
+  lowered = removeUnreachableStatements(lowered);
+  lowered = lowerAsyncIteratorHelpers(lowered);
+  lowered = recoverDelegatedAsyncGeneratorLoops(lowered, {
+    endOfConditional,
+    stripBalancedOuterParentheses,
+  });
+  lowered = lowerResidualConstantLoops(lowered);
   lowered = protectAutomaticSemicolonInsertion(lowered);
   return `${lowered.replace(/^\s+|\s+$/g, '')}\n`;
 }

@@ -2,11 +2,14 @@ import unittest
 
 try:
     from .legacy_snapshot import (
+        LEGACY_AREA_START_OFFSET,
         SNAPSHOT_DATA_MAGIC,
         LegacySnapshotData,
+        _LegacyObjectStreamParser,
         locate_legacy_snapshot,
         parse_legacy_snapshot,
     )
+    from .object_stream import RawChunk, Reference, SerializedObject
     from .profiles import load_profiles
 except ImportError:  # unittest discover with cached_data as the top-level path.
     import sys
@@ -14,10 +17,17 @@ except ImportError:  # unittest discover with cached_data as the top-level path.
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from cached_data.legacy_snapshot import (  # type: ignore[no-redef]
+        LEGACY_AREA_START_OFFSET,
         SNAPSHOT_DATA_MAGIC,
         LegacySnapshotData,
+        _LegacyObjectStreamParser,
         locate_legacy_snapshot,
         parse_legacy_snapshot,
+    )
+    from cached_data.object_stream import (  # type: ignore[no-redef]
+        RawChunk,
+        Reference,
+        SerializedObject,
     )
     from cached_data.profiles import load_profiles  # type: ignore[no-redef]
 
@@ -76,6 +86,45 @@ class LegacySnapshotTests(unittest.TestCase):
 
         self.assertEqual(located.data, snapshot.data)
         self.assertEqual(located.version, profile.version)
+
+    def test_prefers_the_legacy_area_start_when_candidates_tie(self):
+        profile = load_profiles().by_version("10.2.154.4")
+        map_index = profile.root_names.index("one_byte_string_map")
+        parser = _LegacyObjectStreamParser(b"", profile, 8)
+        raw = bytearray(24)
+        raw[12:16] = (1).to_bytes(4, "little")
+        raw[16] = ord("a")
+        parser.objects = [
+            SerializedObject(
+                0,
+                0,
+                24,
+                0,
+                Reference("root", (map_index,)),
+                raw_chunks=[RawChunk(0, 0, bytes(raw))],
+            ),
+            SerializedObject(
+                1,
+                0,
+                24,
+                0,
+                Reference("root", (map_index,)),
+                raw_chunks=[RawChunk(0, 0, bytes(raw))],
+            ),
+        ]
+        parser.locations = {(0, 0): 0, (0, 8): 1}
+
+        image = parser.build_image(
+            roots=[],
+            cache_count=0,
+            hints=((0, LEGACY_AREA_START_OFFSET),),
+            version=profile.version,
+            magic=SNAPSHOT_DATA_MAGIC,
+            checksum=0,
+        )
+
+        self.assertEqual(image.area_start_offset, LEGACY_AREA_START_OFFSET)
+        self.assertEqual(image.string_at(0, LEGACY_AREA_START_OFFSET), "a")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ function buildFunctionTree(analysis, options = {}) {
 
   const adjacency = new Map();
   for (const edge of relationEdges(analysis, mode)) {
-    if (!edge.to) continue;
+    if (!edge.to && !options.includeUnresolved) continue;
     const outgoing = adjacency.get(edge.from) ?? [];
     outgoing.push(edge);
     adjacency.set(edge.from, outgoing);
@@ -53,6 +53,27 @@ function buildFunctionTree(analysis, options = {}) {
     });
     if (current.depth >= maxDepth) continue;
     for (const edge of adjacency.get(current.id) ?? []) {
+      if (!edge.to) {
+        if (!options.includeUnresolved) continue;
+        const unresolvedId = `${current.id}:unresolved:${edge.name}`;
+        edges.push({
+          from: current.id,
+          to: unresolvedId,
+          name: edge.name,
+          resolved: false,
+          unresolved: true,
+        });
+        nodes.push({
+          id: unresolvedId,
+          name: `<unresolved:${edge.name}>`,
+          parentId: current.id,
+          depth: current.depth + 1,
+          startLine: null,
+          endLine: null,
+          unresolved: true,
+        });
+        continue;
+      }
       if (visited.has(edge.to)) continue;
       edges.push({
         from: current.id,
@@ -68,6 +89,7 @@ function buildFunctionTree(analysis, options = {}) {
     mode,
     root: root.id,
     maxDepth: Number.isFinite(maxDepth) ? maxDepth : null,
+    includeUnresolved: Boolean(options.includeUnresolved),
     nodes,
     edges,
   };

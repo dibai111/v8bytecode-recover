@@ -24,6 +24,10 @@ def main() -> int:
     parser.add_argument("input")
     parser.add_argument("--version", help="override V8 version-hash detection")
     parser.add_argument(
+        "--profile-dir",
+        help="directory containing an exact profile pack with index.json",
+    )
+    parser.add_argument(
         "--runtime-variant",
         help="override the profile runtime-ID variant (for example legacy or leaptiering)",
     )
@@ -48,6 +52,7 @@ def main() -> int:
                 args.runtime_variant,
                 args.snapshot_blob,
                 args.payload_offset,
+                args.profile_dir,
             )
         )
     except (OSError, ValueError) as exc:

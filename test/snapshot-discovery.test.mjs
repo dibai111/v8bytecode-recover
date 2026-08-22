@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { nearbySnapshotCandidates } from '../src/snapshot/discovery.mjs';
+import { nearbySnapshotCandidates } from '../src/runtime/snapshot-discovery.mjs';
 
 test('discovers a nearby versioned Node runtime as a legacy snapshot source', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-snapshot-discovery-'));

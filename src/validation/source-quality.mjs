@@ -6,8 +6,45 @@ function countMatches(source, expression) {
   return (source.match(expression) ?? []).length;
 }
 
+function countSyntheticRegistersOutsideLiterals(source) {
+  let count = 0;
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (char === '"' || char === "'" || char === '`') {
+      const quote = char;
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === '\\') index += 2;
+        else if (source[index++] === quote) break;
+      }
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      const end = source.indexOf('\n', index);
+      index = end < 0 ? source.length : end + 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      const end = source.indexOf('*/', index + 2);
+      index = end < 0 ? source.length : end + 2;
+      continue;
+    }
+    if (char === 'r' && /\d/.test(next ?? '') && !/[A-Za-z0-9_$]/.test(source[index - 1] ?? '')) {
+      let end = index + 2;
+      while (end < source.length && /\d/.test(source[end])) end += 1;
+      if (!/[A-Za-z0-9_$]/.test(source[end] ?? '')) count += 1;
+      index = end;
+      continue;
+    }
+    index += 1;
+  }
+  return count;
+}
+
 function duplicateFunctionNames(source) {
-  const names = [...source.matchAll(/^function\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+  const names = [...source.matchAll(/^(?:async\s+)?function(?:\s*\*)?\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
     .map((match) => match[1]);
   return names.length - new Set(names).size;
 }
@@ -25,7 +62,7 @@ function unreachableStatementCount(source) {
       const nextIndent = lines[next].match(/^\s*/)?.[0].length ?? 0;
       if (nextIndent < indent) break;
       if (nextIndent === indent) {
-        if (!/^(?:}|else\s*{|catch\b|finally\b|function\b)/.test(stripped)) count += 1;
+        if (!/^(?:}|else\s*{|catch\b|finally\b|function\b|case\b|default\s*:)/.test(stripped)) count += 1;
         break;
       }
     }
@@ -66,7 +103,8 @@ function guardedLoopResidueCount(source) {
 function qualityMetrics(source) {
   const metrics = {
     accumulatorReferences: countMatches(source, /\bACCU\b/g),
-    syntheticRegisterReferences: countMatches(source, /\br\d+\b/g),
+    // Escaped replacement strings such as "\\r4" are not V8 registers.
+    syntheticRegisterReferences: countSyntheticRegistersOutsideLiterals(source),
     rawGotos: countMatches(source, /\bgoto offset_|\boffset_\d+\b/g),
     unknownOpcodes: countMatches(source, /^\s*\/\/ 0x[0-9a-f]+ @/gmi),
     unresolvedObjects: countMatches(source, /<undefined:|<read_only_|\bread_only_\d+\b/g),

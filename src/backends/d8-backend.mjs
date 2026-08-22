@@ -2,28 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { runProcess, runPython } from '../runtime/processes.mjs';
+import { discoverD8 } from '../runtime/d8-discovery.mjs';
 
-function resolveD8Path(requestedPath) {
-  const candidate = requestedPath
-    || process.env.V8BYTECODE_D8
-    || process.env.V8BLOB_D8
-    || null;
-  if (!candidate) return null;
-  return path.resolve(candidate);
-}
-
-function assertD8Path(d8Path) {
-  if (!d8Path) {
-    throw new Error('The d8 backend requires --d8 PATH, V8BYTECODE_D8, or legacy V8BLOB_D8');
-  }
-  if (!fs.existsSync(d8Path)) throw new Error(`d8 executable does not exist: ${d8Path}`);
-}
-
-function createD8Backend({ d8Path, engineRoot, python }) {
-  const resolvedPath = resolveD8Path(d8Path);
+function createD8Backend({ d8Path, d8Directory, engineRoot, python, projectRoot }) {
+  const discovery = discoverD8({
+    requestedPath: d8Path,
+    d8Directory,
+    projectRoot: projectRoot ?? process.cwd(),
+  });
+  const resolvedPath = discovery.path;
   return {
     id: 'd8',
     d8Path: resolvedPath,
+    discovery,
     capabilities: Object.freeze({
       directCachedData: true,
       rawPayload: false,
@@ -31,13 +22,19 @@ function createD8Backend({ d8Path, engineRoot, python }) {
       matchingRuntime: true,
     }),
     available() {
-      return Boolean(resolvedPath && fs.existsSync(resolvedPath));
+      return discovery.available;
     },
     disassemble(blobPath) {
-      assertD8Path(resolvedPath);
+      if (!discovery.available || !resolvedPath) {
+        throw new Error(
+          `No patched d8 with loadjsc() was found. ${discovery.error ?? 'Configure --d8 or V8BYTECODE_D8.'}`,
+        );
+      }
       const expression = `loadjsc(${JSON.stringify(path.resolve(blobPath))})`;
       return {
         backendId: 'd8',
+        d8Path: resolvedPath,
+        d8Version: discovery.version,
         text: runProcess(resolvedPath, ['-e', expression], {
           cwd: path.dirname(resolvedPath),
         }),

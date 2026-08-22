@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from .cfg import (
@@ -20,6 +21,8 @@ from .statements import (
     RawLinesStatement,
     SimpleStatement,
     Statement,
+    SwitchCase,
+    SwitchStatement,
 )
 from .translator import InstructionTranslator
 from .utils import parse_jump_target, strip_trailing_goto
@@ -50,6 +53,16 @@ class Structurer:
         statements, _ = self._emit_region(start, None)
         return statements
 
+    @staticmethod
+    def _block_terminates(block: BasicBlock) -> bool:
+        terminator = block.terminator
+        if terminator is None:
+            return False
+        return terminator.mnemonic in TERMINATORS or (
+            terminator.mnemonic == "RecoveredTryCatch"
+            and "terminal" in terminator.args
+        )
+
     def _emit_region(
         self, start_offset: int, stop_offset: Optional[int]
     ) -> Tuple[List[Statement], int]:
@@ -68,8 +81,7 @@ class Structurer:
             if idx in seen_indices:
                 idx += 1
             statements.extend(produced)
-            terminator = self.blocks[current_idx].terminator
-            if terminator and terminator.mnemonic in TERMINATORS:
+            if self._block_terminates(self.blocks[current_idx]):
                 break
         return statements, idx
 
@@ -99,6 +111,12 @@ class Structurer:
 
         term = instructions[-1]
         body_instrs = instructions[:-1] if len(instructions) > 1 else []
+
+        if is_conditional(term.mnemonic):
+            terminal_switch = self._build_terminal_switch(block_idx, stop_offset)
+            if terminal_switch is not None:
+                return terminal_switch
+
         for instr in body_instrs:
             recovered = self.recovered_regions.get(instr.offset)
             if instr.mnemonic == "RecoveredTryCatch" and recovered is not None:
@@ -162,6 +180,130 @@ class Structurer:
         if text:
             statements.append(SimpleStatement(text))
         return statements, block_idx + 1
+
+    def _build_terminal_switch(
+        self, block_idx: int, stop_offset: Optional[int]
+    ) -> Optional[Tuple[List[Statement], int]]:
+        cases: List[Tuple[str, int]] = []
+        subject: Optional[str] = None
+        prefix: List[Statement] = []
+        index = block_idx
+
+        while index < len(self.blocks):
+            block = self.blocks[index]
+            term = block.terminator
+            if term is None:
+                return None
+            if is_unconditional_jump(term.mnemonic):
+                default_target = parse_jump_target(term)
+                default_prefix = self._translate_instructions(block.instructions[:-1])
+                break
+            if not is_conditional(term.mnemonic):
+                return None
+
+            parsed = self._switch_case(block)
+            target = parse_jump_target(term)
+            if parsed is None or target is None:
+                return None
+            case_value, case_subject, setup = parsed
+            if subject is None:
+                subject = case_subject
+                prefix = self._translate_instructions(setup)
+            elif case_subject != subject or self._translate_instructions(setup):
+                return None
+            cases.append((case_value, target))
+            index += 1
+        else:
+            return None
+
+        if subject is None or len(cases) < 2 or default_target is None:
+            return None
+        chain_end = self.blocks[index].start
+        targets = {target for _, target in cases}
+        targets.add(default_target)
+        if len(targets) < 2 or any(target <= chain_end for target in targets):
+            return None
+        if stop_offset is not None and any(target >= stop_offset for target in targets):
+            return None
+
+        target_indices = {
+            target: self.offset_to_index.get(target) for target in targets
+        }
+        if any(target_index is None for target_index in target_indices.values()):
+            return None
+        if any(
+            not self._block_terminates(self.blocks[target_index])
+            for target_index in target_indices.values()
+            if target_index is not None
+        ):
+            return None
+
+        ordered_targets = sorted(targets)
+        target_bodies: Dict[int, List[Statement]] = {}
+        for position, target in enumerate(ordered_targets):
+            boundary = (
+                ordered_targets[position + 1]
+                if position + 1 < len(ordered_targets)
+                else stop_offset
+            )
+            target_bodies[target], _ = self._emit_region(target, boundary)
+
+        grouped: Dict[int, List[str]] = {}
+        for value, target in cases:
+            grouped.setdefault(target, []).append(value)
+        switch_cases = [
+            SwitchCase(values=values, body=target_bodies[target])
+            for target, values in grouped.items()
+        ]
+        default_branch = [*default_prefix, *target_bodies[default_target]]
+        prefix.append(
+            SwitchStatement(
+                subject=subject,
+                cases=switch_cases,
+                default_branch=default_branch,
+            )
+        )
+        return prefix, len(self.blocks)
+
+    def _switch_case(
+        self, block: BasicBlock
+    ) -> Optional[Tuple[str, str, List[Instruction]]]:
+        if len(block.instructions) < 3:
+            return None
+        term = block.instructions[-1]
+        condition = self.translator.branch_condition(term)
+        if condition not in {("truthy(ACCU)", True), ("ACCU", True)}:
+            return None
+
+        case_load = self.translator.translate(block.instructions[-3]).strip()
+        comparison = self.translator.translate(block.instructions[-2]).strip()
+        value_match = re.fullmatch(r"ACCU\s*=\s*(.+)", case_load)
+        comparison_match = re.fullmatch(
+            r"ACCU\s*=\s*\((.+?)\s*(?:===|==)\s*ACCU\)", comparison
+        )
+        if not value_match or not comparison_match:
+            return None
+        value = value_match.group(1).strip()
+        if not re.fullmatch(
+            r'-?(?:\d+(?:\.\d+)?|0x[0-9a-fA-F]+)|true|false|null|undefined|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+            value,
+        ):
+            return None
+        return value, comparison_match.group(1).strip(), block.instructions[:-3]
+
+    def _translate_instructions(
+        self, instructions: List[Instruction]
+    ) -> List[Statement]:
+        statements: List[Statement] = []
+        for instr in instructions:
+            recovered = self.recovered_regions.get(instr.offset)
+            if instr.mnemonic == "RecoveredTryCatch" and recovered is not None:
+                statements.append(RawLinesStatement(recovered))
+                continue
+            text = self.translator.translate(instr)
+            if text:
+                statements.append(SimpleStatement(text))
+        return statements
 
     def _build_shared_short_circuit_if(
         self, block_idx: int, stop_offset: Optional[int]
@@ -302,7 +444,7 @@ class Structurer:
         target_idx = self.offset_to_index.get(target)
         if target_idx is not None:
             target_term = self.blocks[target_idx].terminator
-            if target_term and target_term.mnemonic in TERMINATORS:
+            if self._block_terminates(self.blocks[target_idx]):
                 continuations = []
                 for index in range(fallthrough_idx, target_idx):
                     candidate = parse_jump_target(self.blocks[index].terminator)

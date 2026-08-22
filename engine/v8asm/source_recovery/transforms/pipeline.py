@@ -9,6 +9,10 @@ from .common import _compact_compound_assignments
 from .high_level import recover_js_structures
 
 REG_TOKEN_RE = re.compile(r"\br(\d+)\b")
+
+
+def _is_suspend_expression(expression: str) -> bool:
+    return bool(re.match(r"^(?:yield|await)\b", expression.strip()))
 IDENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 
 
@@ -119,7 +123,7 @@ def simplify_lines(lines: List[str], recover_structures: bool = False) -> List[s
             if expr == "ACCU" and accu_value is not None:
                 if accu_alias is not None:
                     expr = accu_alias
-                elif "ACCU" not in accu_value:
+                elif "ACCU" not in accu_value and not _is_suspend_expression(accu_value):
                     expr = accu_value
                 else:
                     unstable_accu_alias = True
@@ -165,7 +169,12 @@ def simplify_lines(lines: List[str], recover_structures: bool = False) -> List[s
             expr = expr.strip()
             if expr == "ACCU" and accu_alias is not None:
                 expr = accu_alias
-            elif expr == "ACCU" and accu_value is not None and "ACCU" not in accu_value:
+            elif (
+                expr == "ACCU"
+                and accu_value is not None
+                and "ACCU" not in accu_value
+                and not _is_suspend_expression(accu_value)
+            ):
                 expr = accu_value
             else:
                 expr = replace_tokens(expr)

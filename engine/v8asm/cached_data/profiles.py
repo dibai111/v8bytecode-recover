@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 
 PROFILE_FORMAT_VERSION = 1
@@ -19,7 +20,27 @@ PROFILE_REQUIRED_FIELDS = frozenset({
 })
 
 
+def _header_format_for_version(version: str, has_ro_snapshot_checksum: bool) -> str:
+    """Infer the historical SerializedCodeData header when older packs omit it."""
+    if has_ro_snapshot_checksum:
+        return "read-only-checksum"
+    major_minor = tuple(int(value) for value in version.split(".")[:2])
+    if major_minor >= (9, 0):
+        return "legacy"
+    if major_minor >= (8, 0):
+        return "reservation-checksum"
+    if major_minor >= (7, 4):
+        return "reservation-checksum-pair"
+    if major_minor >= (6, 0):
+        return "legacy-code-stub-extra"
+    return "legacy-code-stub"
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
+    if not isinstance(version, str) or not version or any(
+        not part.isdigit() for part in version.split(".")
+    ):
+        raise ValueError(f"invalid V8 profile version: {version}")
     try:
         return tuple(int(part) for part in version.split("."))
     except ValueError as exc:
@@ -28,6 +49,8 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 
 def validate_profile_data(index: dict, items: list[dict]) -> tuple[str, ...]:
     errors: list[str] = []
+    if not isinstance(index, dict):
+        return ("index must be an object",)
     if index.get("format") != PROFILE_FORMAT_VERSION:
         errors.append(
             f"index format must be {PROFILE_FORMAT_VERSION}, got {index.get('format')!r}"
@@ -38,13 +61,39 @@ def validate_profile_data(index: dict, items: list[dict]) -> tuple[str, ...]:
         versions = []
     if len(versions) != len(set(versions)):
         errors.append("index versions contains duplicates")
+    if not versions:
+        errors.append("index versions must not be empty")
+    for version in versions:
+        try:
+            _version_tuple(version)
+        except ValueError as exc:
+            errors.append(str(exc))
     encoding = index.get("operand_encoding")
+    operand_names: set[str] = set()
     if not isinstance(encoding, dict):
         errors.append("index operand_encoding must be an object")
     else:
         for key in ("scalable_signed", "scalable_unsigned", "fixed_sizes"):
             if key not in encoding:
                 errors.append(f"index operand_encoding is missing {key}")
+        for key in ("scalable_signed", "scalable_unsigned"):
+            values = encoding.get(key)
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) for value in values
+            ):
+                errors.append(f"index operand_encoding {key} must be an array of strings")
+            else:
+                operand_names.update(values)
+        fixed_sizes = encoding.get("fixed_sizes")
+        if not isinstance(fixed_sizes, dict) or not all(
+            isinstance(name, str) and isinstance(size, int) and size > 0
+            for name, size in fixed_sizes.items()
+        ):
+            errors.append(
+                "index operand_encoding fixed_sizes must map names to positive integers"
+            )
+        else:
+            operand_names.update(fixed_sizes)
 
     seen_hashes: dict[int, str] = {}
     for position, item in enumerate(items):
@@ -90,6 +139,20 @@ def validate_profile_data(index: dict, items: list[dict]) -> tuple[str, ...]:
                 errors.append(f"{label}: bytecode opcode values contain duplicates")
             elif any(not isinstance(value, int) or not 0 <= value <= 255 for value in opcode_values):
                 errors.append(f"{label}: opcode values must be integers from 0 through 255")
+            for entry in bytecodes:
+                if not isinstance(entry, dict):
+                    continue
+                operands = entry.get("operands")
+                if not isinstance(operands, list) or not all(
+                    isinstance(operand, str) for operand in operands
+                ):
+                    errors.append(f"{label}: bytecode operands must be an array of strings")
+                    continue
+                unknown = sorted(set(operands) - operand_names)
+                if unknown:
+                    errors.append(
+                        f"{label}: unsupported operand types: {', '.join(unknown)}"
+                    )
     return tuple(errors)
 
 
@@ -129,6 +192,8 @@ class ScopeInfoLayout:
     function_variable_shift: int
     function_variable_mask: int
     inferred_function_name_bit: int
+    flags_slot: int = 1
+    context_count_slot: int = 3
 
 
 @dataclass(frozen=True)
@@ -154,6 +219,9 @@ class Profile:
     static_root_area_start: int | None
     object_boilerplate_layout: str
     opcodes: tuple[Opcode, ...]
+    source_layout: str = "unknown"
+    header_format: str | None = None
+    cache_header_layout: dict[str, object] | None = None
 
     @property
     def opcode_by_value(self) -> dict[int, Opcode]:
@@ -171,6 +239,12 @@ class Profile:
             choices = ", ".join(sorted(self.runtime_variants))
             raise ValueError(f"unknown runtime variant {selected}; choose from {choices}") from exc
 
+    @property
+    def cache_header_format(self) -> str:
+        return self.header_format or _header_format_for_version(
+            self.version, self.has_ro_snapshot_checksum
+        )
+
 
 @dataclass(frozen=True)
 class ProfileSet:
@@ -178,6 +252,7 @@ class ProfileSet:
     scalable_signed: frozenset[str]
     scalable_unsigned: frozenset[str]
     fixed_sizes: dict[str, int]
+    directory: Path
 
     def by_version(self, version: str) -> Profile:
         clean = version.removesuffix("-electron.0").split("-", 1)[0]
@@ -196,7 +271,10 @@ class ProfileSet:
             ),
         )[:3]
         choices = ", ".join(item.version for item in nearest)
-        raise ValueError(f"unsupported V8 version: {version}; nearest profiles: {choices}")
+        raise ValueError(
+            f"unsupported V8 version: {version}; no exact profile in {self.directory}; "
+            f"nearest profiles (not used): {choices}"
+        )
 
     def by_hash(self, value: int) -> Profile:
         for profile in self.profiles:
@@ -204,22 +282,76 @@ class ProfileSet:
                 return profile
         versions = ", ".join(profile.version for profile in self.profiles)
         raise ValueError(
-            f"unknown V8 version hash: 0x{value:08x}; bundled profiles: {versions}; "
+            f"unknown V8 version hash: 0x{value:08x}; profiles in {self.directory}: {versions}; "
             "use --profile VERSION or --backend d8 --d8 PATH"
         )
 
 
-@lru_cache(maxsize=1)
-def load_profiles() -> ProfileSet:
-    directory = Path(__file__).with_name("profiles")
-    raw = json.loads((directory / "index.json").read_text(encoding="utf-8"))
+def _default_profile_directory() -> Path:
+    return Path(__file__).with_name("profiles").resolve()
+
+
+def _resolve_profile_directory(directory: str | Path | None) -> Path:
+    return (
+        _default_profile_directory()
+        if directory is None
+        else Path(directory).expanduser().resolve()
+    )
+
+
+def _read_json(path: Path, label: str) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unable to read {label} {path}: {exc}") from exc
+
+
+def read_profile_data(
+    directory: str | Path | None = None,
+) -> tuple[dict, list[dict]]:
+    profile_directory = _resolve_profile_directory(directory)
+    if not profile_directory.is_dir():
+        raise ValueError(f"profile directory does not exist: {profile_directory}")
+    index_path = profile_directory / "index.json"
+    raw = _read_json(index_path, "profile index")
+    if not isinstance(raw, dict):
+        raise ValueError(f"profile index must be an object: {index_path}")
+
+    versions = raw.get("versions")
+    if not isinstance(versions, list) or not all(
+        isinstance(version, str) for version in versions
+    ):
+        errors = validate_profile_data(raw, [])
+        raise ValueError("invalid cached-data profile set:\n- " + "\n- ".join(errors))
+    invalid_versions = []
+    for version in versions:
+        try:
+            _version_tuple(version)
+        except ValueError as exc:
+            invalid_versions.append(str(exc))
+    if invalid_versions:
+        raise ValueError(
+            "invalid cached-data profile set:\n- "
+            + "\n- ".join(invalid_versions)
+        )
+
     profile_data = [
-        json.loads((directory / f"{version}.json").read_text(encoding="utf-8"))
-        for version in raw["versions"]
+        _read_json(
+            profile_directory / f"{version}.json",
+            f"profile {version}",
+        )
+        for version in versions
     ]
     errors = validate_profile_data(raw, profile_data)
     if errors:
         raise ValueError("invalid cached-data profile set:\n- " + "\n- ".join(errors))
+    return raw, cast(list[dict], profile_data)
+
+
+@lru_cache(maxsize=8)
+def _load_profiles_cached(directory: str) -> ProfileSet:
+    profile_directory = Path(directory)
+    raw, profile_data = read_profile_data(profile_directory)
     profiles = tuple(
         Profile(
             version=item["version"],
@@ -277,6 +409,9 @@ def load_profiles() -> ProfileSet:
                 )
                 for entry in item["bytecodes"]
             ),
+            source_layout=item.get("source_layout", "unknown"),
+            header_format=item.get("header_format"),
+            cache_header_layout=item.get("cache_header_layout"),
         )
         for item in profile_data
     )
@@ -286,4 +421,9 @@ def load_profiles() -> ProfileSet:
         scalable_signed=frozenset(encoding["scalable_signed"]),
         scalable_unsigned=frozenset(encoding["scalable_unsigned"]),
         fixed_sizes=encoding["fixed_sizes"],
+        directory=profile_directory,
     )
+
+
+def load_profiles(directory: str | Path | None = None) -> ProfileSet:
+    return _load_profiles_cached(str(_resolve_profile_directory(directory)))

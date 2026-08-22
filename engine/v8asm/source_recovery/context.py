@@ -85,10 +85,14 @@ class DecompilerContext:
         anonymous_index = 0
         used_names: set[str] = set()
         for obj in self.objects:
-            if not isinstance(obj, V8SharedFunctionInfo) or not obj.name:
+            if not isinstance(obj, V8SharedFunctionInfo):
                 continue
-            target = self.get_object(obj.name.address)
-            raw_name = target.value if isinstance(target, V8String) else None
+            raw_name = None
+            if obj.name:
+                target = self.get_object(obj.name.address)
+                raw_name = target.value if isinstance(target, V8String) else None
+            if raw_name is None:
+                raw_name = getattr(obj, "raw_name", None)
             if not raw_name:
                 anonymous_index += 1
                 candidate = (
@@ -490,15 +494,16 @@ class DecompilerContext:
                 raw_name = ref.value or None
             elif sfi.name.desc:
                 raw_name = sfi.name.desc.strip("<>")
+        if raw_name is None:
+            raw_name = getattr(sfi, "raw_name", None)
         return js_binding_identifier(raw_name, f"fn_{sfi.address:012x}")
 
     def get_raw_function_name(self, sfi: V8SharedFunctionInfo) -> Optional[str]:
-        if not sfi.name:
-            return None
-        ref = self.get_object(sfi.name.address)
-        if isinstance(ref, V8String):
-            return ref.value or None
-        return None
+        if sfi.name:
+            ref = self.get_object(sfi.name.address)
+            if isinstance(ref, V8String):
+                return ref.value or None
+        return getattr(sfi, "raw_name", None)
 
     def constant_pool_entries(self, bytecode: V8BytecodeArray) -> List[ConstantPoolEntry]:
         pool = self.bytecode_constant_pools.get(bytecode.address)
@@ -570,7 +575,12 @@ class DecompilerContext:
         const = self.get_object(boilerplate.constant_elements.address)
         if isinstance(const, V8FixedArray):
             return self._format_fixed_array(const)
-        if boilerplate.constant_elements.desc.strip("<>") == "empty_fixed_array":
+        if boilerplate.constant_elements.desc.strip("<>") in {
+            "empty_fixed_array",
+            # Legacy snapshots encode an empty double-array boilerplate by
+            # pointing at the map object instead of a FixedArray instance.
+            "fixed_double_array_map",
+        }:
             return "[]"
         return f"<ArrayBoilerplate {boilerplate.elements_kind}>"
 

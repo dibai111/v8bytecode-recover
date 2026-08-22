@@ -1,5 +1,8 @@
 const readOnlyReferencePattern = /<read_only_(\d+),(\d+)>/g;
 const readOnlyResidueFields = new Set(['unresolvedObjects', 'unresolvedHeapValues']);
+// A per-function decompile failure falls back to commented level-1 output;
+// that is a bounded, syntactically valid degradation, not unknown residue.
+const toleratedResidueFields = new Set(['fallbackFunctions']);
 
 const partialRecoveryBanner = '// v8bytecode-recover: best-effort recovery; unresolved read-only V8 references use stable placeholders.';
 
@@ -10,6 +13,15 @@ function isReadOnlyOnlyResidue(metrics) {
   return Object.entries(metrics).every(([field, value]) => (
     field === 'residueFree'
     || readOnlyResidueFields.has(field)
+    || value === 0
+  ));
+}
+
+function isFallbackOnlyResidue(metrics) {
+  if (!(metrics.fallbackFunctions > 0)) return false;
+  return Object.entries(metrics).every(([field, value]) => (
+    field === 'residueFree'
+    || toleratedResidueFields.has(field)
     || value === 0
   ));
 }
@@ -48,6 +60,7 @@ function createPartialRecoverySource(source) {
 
 export {
   createPartialRecoverySource,
+  isFallbackOnlyResidue,
   isReadOnlyOnlyResidue,
   partialRecoveryBanner,
   replaceUnresolvedReadOnlyReferences,

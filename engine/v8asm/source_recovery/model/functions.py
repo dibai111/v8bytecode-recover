@@ -8,6 +8,7 @@ class V8SharedFunctionInfo(V8HeapObject):
     def __init__(self, address: int, i_type: str, lines: list[str]):
         super().__init__(address, i_type, lines)
         self.name: Optional[V8Address[V8String]] = None
+        self.raw_name: Optional[str] = None
         self.formal_parameter_count: Optional[int] = None
         self.language_mode: Optional[str] = None
         self.trusted_function_data: Optional[V8Address[V8BytecodeArray]] = None
@@ -22,7 +23,14 @@ class V8SharedFunctionInfo(V8HeapObject):
     def parse(self):
         for ln in self.raw_asm_lines:
             if ln.startswith(" - name: "):
-                self.name = self.__parse_address(ln)
+                try:
+                    self.name = self.__parse_address(ln)
+                except (ValueError, IndexError):
+                    # Name-only block for a lazy function: the value is a
+                    # literal name instead of an address reference.
+                    self.raw_name = (
+                        ln.split(":", 1)[1].strip().strip('"') or None
+                    )
             elif ln.startswith(" - formal_parameter_count:"):
                 self.formal_parameter_count = int(parse_string_after_colon(ln))
             elif " - language_mode:" in ln:

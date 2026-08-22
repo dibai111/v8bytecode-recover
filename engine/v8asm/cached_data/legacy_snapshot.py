@@ -93,6 +93,97 @@ def _decode_embedded_section(section: bytes) -> bytes | None:
     return decoded
 
 
+@dataclass(frozen=True)
+class EmbeddedReadOnlyImage:
+    """Read-only heap section extracted from an embedder binary (V8 10.10+)."""
+
+    version: str
+    checksum: int
+    section: bytes
+
+    @staticmethod
+    def _external_blob(version: str, checksum: int, section: bytes, magic: int) -> bytes:
+        """Wrap an embedded read-only section in the external snapshot-blob
+        layout that ReadOnlySnapshot.parse expects.
+
+        The wrapped checksum is replaced by the caller afterwards because the
+        embedded header stores the startup-blob checksum, not the read-only
+        checksum that cached-data headers compare against.
+        """
+        import struct
+
+        header = bytearray(88)
+        struct.pack_into("<I", header, 12, checksum)
+        version_bytes = version.encode("ascii")
+        header[16 : 16 + len(version_bytes)] = version_bytes
+        struct.pack_into("<I", header, 80, 88)
+        struct.pack_into("<I", header, 84, 88 + 4 + len(section))
+        return bytes(header) + struct.pack("<I", magic) + section
+
+    def external_blob(self, magic: int, ro_checksum: int | None = None) -> bytes:
+        return self._external_blob(
+            self.version,
+            self.checksum if ro_checksum is None else ro_checksum,
+            self.section,
+            magic,
+        )
+
+
+def embedded_read_only_heap_sections(
+    data: bytes, profile: Profile
+) -> tuple[EmbeddedReadOnlyImage, ...]:
+    """Extract read-only heap sections from embedders whose V8 (10.10+) stores
+    the serialized image without SnapshotData magic, e.g. official Node builds.
+
+    The embedded startup blob places a u32 context count followed by the V8
+    version string; offsets at +76/+80 locate the read-only section, which
+    begins with a u32 uncompressed size and the raw page payload.
+    """
+    marker = profile.version.encode("ascii")
+    candidates: list[EmbeddedReadOnlyImage] = []
+    seen: set[bytes] = set()
+    search_from = 0
+    while True:
+        at = data.find(marker, search_from)
+        if at < 0:
+            break
+        search_from = at + 1
+        base = at - 12
+        if base < 0 or base + 84 > len(data):
+            continue
+        contexts = _uint32(data, base)
+        if not 1 <= contexts <= 64:
+            continue
+        try:
+            version = _version_from_header(data[base:], profile)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not version.startswith(profile.version):
+            continue
+        read_only_offset = _uint32(data, base + 76)
+        shared_heap_offset = _uint32(data, base + 80)
+        if not 84 <= read_only_offset < shared_heap_offset <= len(data) - base:
+            continue
+        section = data[base + read_only_offset : base + shared_heap_offset]
+        if len(section) < 8:
+            continue
+        declared_size = _uint32(section, 0)
+        payload = section[8:]
+        if declared_size != len(payload):
+            continue
+        if section in seen:
+            continue
+        seen.add(section)
+        candidates.append(
+            EmbeddedReadOnlyImage(
+                version=version,
+                checksum=_uint32(data, base + 4),
+                section=section,
+            )
+        )
+    return tuple(candidates)
+
+
 def embedded_read_only_snapshots(data: bytes, profile: Profile) -> tuple[LegacySnapshotData, ...]:
     """Extract compressed read-only SnapshotData sections from a Node binary."""
     marker = profile.version.encode("ascii")
@@ -444,7 +535,12 @@ class _LegacyObjectStreamParser(ObjectStreamParser):
                 f"(matched {best_score} of {len(hints)} offsets)"
             )
         if len(best) != 1:
-            raise ValueError("legacy snapshot read-only allocation area is ambiguous")
+            preferred = [
+                item for item in best if item[1] == LEGACY_AREA_START_OFFSET
+            ]
+            if len(preferred) != 1:
+                raise ValueError("legacy snapshot read-only allocation area is ambiguous")
+            best = preferred
         _, area_start, strings = best[0]
 
         root_locations: dict[tuple[int, int], str] = {}
@@ -493,9 +589,11 @@ def parse_legacy_snapshot(
 
 __all__ = [
     "LEGACY_AREA_START_OFFSET",
+    "EmbeddedReadOnlyImage",
     "LegacySnapshotData",
     "LegacySnapshotImage",
     "SNAPSHOT_DATA_MAGIC",
+    "embedded_read_only_heap_sections",
     "embedded_read_only_snapshots",
     "locate_legacy_snapshot",
     "parse_legacy_snapshot",

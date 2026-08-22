@@ -15,21 +15,24 @@ import {
 import { analyzeSource } from '../analysis/source-index.mjs';
 import { writeFunctionFiles } from '../analysis/function-files.mjs';
 import { buildFunctionTree } from '../analysis/function-tree.mjs';
+import { buildInlineView } from '../analysis/inline-view.mjs';
 import { normalizeSourceNames } from '../analysis/name-normalization.mjs';
+import { restrictAnalysisToScope } from '../analysis/scope-view.mjs';
 import {
   normalizeDerivedSource,
   unresolvedClosureBindings,
 } from '../recovery/source-transforms.mjs';
 import { assertPythonAvailable, syntaxCheck } from '../runtime/processes.mjs';
-import { nearbySnapshotCandidates } from '../snapshot/discovery.mjs';
+import { nearbySnapshotCandidates } from '../runtime/snapshot-discovery.mjs';
 import { describeResidue, qualityMetrics } from '../validation/source-quality.mjs';
 import {
   createRecoveryReport,
   sourceSummary,
   writeRecoveryReport,
-} from '../reporting/recovery-report.mjs';
+} from '../io/recovery-report.mjs';
 import {
   createPartialRecoverySource,
+  isFallbackOnlyResidue,
   isReadOnlyOnlyResidue,
 } from '../validation/unresolved-values.mjs';
 import {
@@ -42,6 +45,31 @@ import {
   updateRecoveryManifest,
   writeRecoveryManifest,
 } from '../io/recovery-manifest.mjs';
+
+function parseDisassemblyMetadata(text) {
+  const version = text.match(/^#\s+disassembler\s+V8\s+([^\s]+)/mi)?.[1] ?? null;
+  const compatibilityStatus = text.match(
+    /^#\s+embedder_compatibility=([^\s]+)/mi,
+  )?.[1] ?? null;
+  const runtimeVariant = text.match(/^#\s+embedder_compatibility=[^\n]*\bruntime_variant=([^\s]+)/mi)?.[1]
+    ?? null;
+  const flagsStatus = text.match(/^#\s+embedder_compatibility=[^\n]*\bflags_status=([^\s]+)/mi)?.[1]
+    ?? null;
+  return {
+    profileVersion: version,
+    compatibilityStatus,
+    runtimeVariant,
+    flagsStatus,
+  };
+}
+
+function tryAnalyzeSource(source) {
+  try {
+    return analyzeSource(source);
+  } catch {
+    return null;
+  }
+}
 
 function disassembleWithSnapshots(input, options, backend) {
   const snapshots = options.snapshot
@@ -59,6 +87,9 @@ function disassembleWithSnapshots(input, options, backend) {
         source: result.text,
         backendId: result.backendId,
         snapshotPath,
+        d8Path: result.d8Path ?? null,
+        d8Version: result.d8Version ?? null,
+        ...parseDisassemblyMetadata(result.text),
       };
     } catch (error) {
       errors.push({ snapshotPath, error });
@@ -76,11 +107,13 @@ function disassembleWithSnapshots(input, options, backend) {
 
 function getDisassembly(input, options, backend, inputFormat) {
   if (inputFormat === 'disassembled') {
+    const source = fs.readFileSync(input.path, 'utf8');
     return {
-      source: fs.readFileSync(input.path, 'utf8'),
+      source,
       backendId: 'file',
       snapshotPath: null,
       recoveredSource: null,
+      ...parseDisassemblyMetadata(source),
     };
   }
   if (inputFormat === 'serialized') {
@@ -91,6 +124,7 @@ function getDisassembly(input, options, backend, inputFormat) {
       backendId: 'artifact',
       snapshotPath: artifact.snapshot,
       artifact,
+      ...parseDisassemblyMetadata(artifact.disassembly ?? artifact.source),
     };
   }
   return disassembleWithSnapshots(input, options, backend);
@@ -103,6 +137,7 @@ const researchExtensions = Object.freeze({
   functions: '.functions.json',
   callgraph: '.callgraph.json',
   tree: '.tree.json',
+  inline: '.inline.json',
   names: '.names.json',
   serialized: '.v8recovery.json',
 });
@@ -125,6 +160,8 @@ function emitResearchOutputs(
   inputMetadata,
   disassemblyMetadata,
 ) {
+  const scoped = restrictAnalysisToScope(analysis, options.scope);
+  const analysisView = scoped.analysis;
   const emittedPaths = [];
   for (const kind of options.emit ?? []) {
     const destination = researchOutputPath(options.output, relativeOutput, kind);
@@ -132,23 +169,33 @@ function emitResearchOutputs(
     let content;
     if (kind === 'functions') {
       content = JSON.stringify({
-        format: analysis.format,
-        sourceBytes: analysis.sourceBytes,
-        functionCount: analysis.functionCount,
-        functions: analysis.functions,
+        format: analysisView.format,
+        sourceBytes: analysisView.sourceBytes,
+        functionCount: analysisView.functionCount,
+        scope: scoped.scope,
+        functions: analysisView.functions,
       }, null, 2);
     } else if (kind === 'callgraph') {
       content = JSON.stringify({
-        format: analysis.format,
-        sourceBytes: analysis.sourceBytes,
-        functionCount: analysis.functionCount,
-        callGraph: analysis.callGraph,
+        format: analysisView.format,
+        sourceBytes: analysisView.sourceBytes,
+        functionCount: analysisView.functionCount,
+        scope: scoped.scope,
+        callGraph: analysisView.callGraph,
       }, null, 2);
     } else if (kind === 'tree') {
-      content = JSON.stringify(buildFunctionTree(analysis, {
+      content = JSON.stringify(buildFunctionTree(analysisView, {
         root: options.treeRoot ?? 'start',
         mode: options.treeMode ?? 'declarers',
         maxDepth: options.treeDepth,
+        includeUnresolved: options.showAll,
+      }), null, 2);
+    } else if (kind === 'inline') {
+      content = JSON.stringify(buildInlineView(analysisView, {
+        root: options.treeRoot ?? 'start',
+        maxDepth: options.inlineDepth ?? options.treeDepth,
+        branchLimit: options.inlineBranchLimit,
+        showAll: options.showAll,
       }), null, 2);
     } else if (kind === 'names') {
       content = JSON.stringify({
@@ -163,7 +210,7 @@ function emitResearchOutputs(
         snapshot: disassemblyMetadata.snapshotPath,
         disassembly: fs.readFileSync(disassemblyPath, 'utf8'),
         source,
-        analysis,
+        analysis: analysisView,
         normalization: {
           normalized: Boolean(options.normalizeNames),
           mappings: normalization.mappings,
@@ -176,6 +223,11 @@ function emitResearchOutputs(
     emittedPaths.push(destination);
   }
   return emittedPaths;
+}
+
+function researchCandidatePath(outputRoot, relativeOutput) {
+  const base = relativeOutput.replace(/\.(?:c?js|mjs)$/i, '');
+  return path.join(outputRoot, '.research', `${base}.candidate.js`);
 }
 
 function outputRelativePathFromAbsolute(outputRoot, filePath) {
@@ -260,11 +312,16 @@ function reusableEntry({
   const quality = qualityMetrics(source);
   if (!quality.residueFree) return null;
   let analysis = null;
-  try {
-    analysis = needsSourceAnalysis ? analyzeSource(source) : null;
-  } catch {
-    return null;
+  if (needsSourceAnalysis) {
+    try {
+      analysis = analyzeSource(source);
+    } catch {
+      return null;
+    }
+  } else {
+    analysis = tryAnalyzeSource(source);
   }
+  const summaryAnalysis = analysis ?? tryAnalyzeSource(source);
 
   const report = {
     ...(entry.report ?? {}),
@@ -274,10 +331,10 @@ function reusableEntry({
     elapsedMs: 0,
     inputSha256: inputFingerprint.sha256,
     inputBytes: inputFingerprint.sizeBytes,
-    ...sourceSummary(source, quality, analysis),
-    functionCount: analysis?.functionCount ?? entry.report?.functionCount ?? null,
-    callGraphEdges: analysis?.callGraph.edges.length ?? entry.report?.callGraphEdges ?? null,
-    referenceGraphEdges: analysis?.referenceGraph.edges.length ?? entry.report?.referenceGraphEdges ?? null,
+    ...sourceSummary(source, quality, summaryAnalysis),
+    functionCount: summaryAnalysis?.functionCount ?? entry.report?.functionCount ?? null,
+    callGraphEdges: summaryAnalysis?.callGraph.edges.length ?? entry.report?.callGraphEdges ?? null,
+    referenceGraphEdges: summaryAnalysis?.referenceGraph.edges.length ?? entry.report?.referenceGraphEdges ?? null,
   };
   return {
     report,
@@ -296,7 +353,7 @@ function recoverSources(options, paths, backend) {
   const payloadOffset = options.payloadOffset ?? null;
   const backendName = options.backend ?? 'auto';
   const emitKinds = options.emit ?? [];
-  const needsSourceAnalysis = emitKinds.some((kind) => ['functions', 'callgraph', 'tree', 'names', 'serialized'].includes(kind))
+  const needsSourceAnalysis = emitKinds.some((kind) => ['functions', 'callgraph', 'tree', 'inline', 'names', 'serialized'].includes(kind))
     || Boolean(options.splitFunctions);
   if (!fs.existsSync(options.input)) throw new Error(`Input does not exist: ${options.input}`);
   if (options.snapshot && !fs.existsSync(options.snapshot)) {
@@ -375,6 +432,8 @@ function recoverSources(options, paths, backend) {
       const fileStartedAt = Date.now();
       let splitResult = null;
       let inputFingerprint = null;
+      let researchSource = null;
+      let researchOutput = null;
       const fileReport = {
         input: input.relativePath,
         inputFormat: itemFormat,
@@ -414,6 +473,7 @@ function recoverSources(options, paths, backend) {
         const disassembly = getDisassembly(input, options, backend, itemFormat);
         fs.writeFileSync(disassemblyPath, disassembly.source, 'utf8');
         const derived = disassembly.recoveredSource ?? backend.decompile(disassemblyPath, options.level);
+        researchSource = derived;
         const missingClosures = unresolvedClosureBindings(derived);
         if (missingClosures.length > 0) {
           throw new Error(
@@ -426,6 +486,7 @@ function recoverSources(options, paths, backend) {
           ? normalizeSourceNames(normalizedSource)
           : { source: normalizedSource, mappings: [] };
         let source = normalization.source;
+        researchSource = source;
         let partialRecovery = null;
         let quality = qualityMetrics(source);
         if (!quality.residueFree && !options.strict && isReadOnlyOnlyResidue(quality)) {
@@ -445,13 +506,42 @@ function recoverSources(options, paths, backend) {
         fs.writeFileSync(candidatePath, source, 'utf8');
         const syntax = syntaxCheck(candidatePath);
         if (!syntax.ok) {
+          if (options.research) {
+            researchOutput = researchCandidatePath(options.output, relativeOutput);
+            fs.mkdirSync(path.dirname(researchOutput), { recursive: true });
+            fs.writeFileSync(researchOutput, source, 'utf8');
+            fileReport.researchOutput = path.relative(options.output, researchOutput);
+            fileReport.researchReason = 'syntax-error';
+          }
           throw new Error(`Generated JavaScript failed syntax validation\n${syntax.detail}`);
         }
         if (!quality.residueFree) {
-          throw new Error(`Decompiler residue remains: ${describeResidue(quality, source)}`);
+          if (options.research) {
+            researchOutput = researchCandidatePath(options.output, relativeOutput);
+            fs.mkdirSync(path.dirname(researchOutput), { recursive: true });
+            fs.writeFileSync(researchOutput, source, 'utf8');
+            fileReport.researchOutput = path.relative(options.output, researchOutput);
+            fileReport.researchReason = 'quality-residue';
+          }
+          // Per-function fallbacks are a bounded degradation: the failing
+          // functions keep commented linear bytecode. Keep the file unless
+          // --strict demands zero tolerance.
+          if (!options.strict && isFallbackOnlyResidue(quality)) {
+            partialRecovery = {
+              reason: 'per-function-fallback',
+              count: quality.fallbackFunctions,
+              residueBefore: { fallbackFunctions: quality.fallbackFunctions },
+              replacements: [],
+            };
+          } else {
+            throw new Error(`Decompiler residue remains: ${describeResidue(quality, source)}`);
+          }
         }
 
         const analysis = needsSourceAnalysis ? analyzeSource(source) : null;
+        const scopedAnalysis = analysis
+          ? restrictAnalysisToScope(analysis, options.scope).analysis
+          : null;
         fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
         fs.copyFileSync(candidatePath, sourcePath);
         emitResearchOutputs(
@@ -473,7 +563,7 @@ function recoverSources(options, paths, backend) {
             options.splitFunctions,
             relativeOutput,
             source,
-            analysis,
+            scopedAnalysis,
             {
               functionNames: options.functionNames,
               includeFunctions: options.includeFunctions,
@@ -490,17 +580,26 @@ function recoverSources(options, paths, backend) {
             }
           }
         }
+        const summaryAnalysis = analysis ?? tryAnalyzeSource(source);
         emitted += 1;
         Object.assign(fileReport, {
           success: true,
           backend: disassembly.backendId,
+          profileVersion: disassembly.profileVersion ?? options.profile ?? null,
+          compatibilityStatus: disassembly.compatibilityStatus,
+          detectedRuntimeVariant: disassembly.runtimeVariant,
+          detectedFlagsStatus: disassembly.flagsStatus,
+          d8Path: disassembly.d8Path ?? null,
+          d8Version: disassembly.d8Version ?? null,
+          embedder: options.embedder ?? 'unknown',
           snapshot: disassembly.snapshotPath,
           elapsedMs: Date.now() - fileStartedAt,
-          ...sourceSummary(source, quality, analysis),
-          functionCount: analysis?.functionCount ?? null,
-          callGraphEdges: analysis?.callGraph.edges.length ?? null,
-          referenceGraphEdges: analysis?.referenceGraph.edges.length ?? null,
+          ...sourceSummary(source, quality, summaryAnalysis),
+          functionCount: summaryAnalysis?.functionCount ?? null,
+          callGraphEdges: summaryAnalysis?.callGraph.edges.length ?? null,
+          referenceGraphEdges: summaryAnalysis?.referenceGraph.edges.length ?? null,
           partialRecovery,
+          researchOutput,
           normalizedNames: normalization.mappings,
           splitFunctions: splitResult?.directory ?? null,
           selectedFunctionCount: splitResult?.functionCount ?? null,
@@ -540,12 +639,20 @@ function recoverSources(options, paths, backend) {
           ),
           success: true,
           partialRecovery,
+          researchOutput,
           resumed: false,
           report: fileReport,
         });
       } catch (error) {
         failed += 1;
         fileReport.error = String(error.message ?? error);
+        if (options.research && researchSource !== null && !researchOutput) {
+          researchOutput = researchCandidatePath(options.output, relativeOutput);
+          fs.mkdirSync(path.dirname(researchOutput), { recursive: true });
+          fs.writeFileSync(researchOutput, researchSource, 'utf8');
+          fileReport.researchOutput = path.relative(options.output, researchOutput);
+          fileReport.researchReason = 'recovery-error';
+        }
         fileReport.elapsedMs = Date.now() - fileStartedAt;
         if (fs.existsSync(sourcePath)) fs.rmSync(sourcePath, { force: true });
         for (const analysisPath of analysisPaths) {
@@ -573,6 +680,7 @@ function recoverSources(options, paths, backend) {
           generatedFiles: [],
           success: false,
           partialRecovery: null,
+          researchOutput,
           resumed: false,
           report: fileReport,
         });

@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "embedders": {
+    "unknown": {
+      "label": "Unknown embedder",
+      "profile_backend": "version-only",
+      "d8_backend": "requires matching patched d8",
+      "default_backend": "profile",
+      "requires_runtime_evidence": true,
+      "snapshot": "unknown",
+      "exact_evidence": ["version_hash", "header_layout", "payload_checksum"],
+      "notes": "Do not claim exact compatibility without source, flags and snapshot evidence."
+    },
+    "node": {
+      "label": "Node.js",
+      "profile_backend": "supported with matching Node snapshot",
+      "d8_backend": "requires matching patched d8",
+      "default_backend": "profile",
+      "requires_runtime_evidence": true,
+      "snapshot": "Node startup snapshot or verified read-only snapshot checksum",
+      "exact_evidence": ["version_hash", "header_layout", "payload_checksum", "snapshot_checksum"],
+      "notes": "Nearby versioned Node runtimes may be discovered automatically, but snapshot identity still matters."
+    },
+    "electron": {
+      "label": "Electron",
+      "profile_backend": "version and layout only unless embedder evidence is supplied",
+      "d8_backend": "preferred when a matching patched d8 is available",
+      "default_backend": "d8",
+      "requires_runtime_evidence": true,
+      "snapshot": "Electron startup snapshot",
+      "exact_evidence": ["version_hash", "header_layout", "payload_checksum", "embedder_flags", "snapshot_checksum"],
+      "notes": "Electron may use different flags, runtime tables and startup snapshots than upstream Node or d8."
+    },
+    "chromium": {
+      "label": "Chromium",
+      "profile_backend": "version and layout only unless embedder evidence is supplied",
+      "d8_backend": "preferred when a matching patched d8 is available",
+      "default_backend": "d8",
+      "requires_runtime_evidence": true,
+      "snapshot": "Chromium startup snapshot",
+      "exact_evidence": ["version_hash", "header_layout", "payload_checksum", "embedder_flags", "snapshot_checksum"],
+      "notes": "Chromium builds can diverge from upstream V8 through build flags and embedder data."
+    },
+    "custom": {
+      "label": "Custom embedder",
+      "profile_backend": "diagnostic or best effort",
+      "d8_backend": "requires matching patched d8 or a custom adapter",
+      "default_backend": "d8",
+      "requires_runtime_evidence": true,
+      "snapshot": "embedder-specific snapshot",
+      "exact_evidence": ["version_hash", "header_layout", "payload_checksum", "embedder_flags", "snapshot_checksum"],
+      "notes": "Add a versioned adapter when the embedder changes source layout or runtime tables."
+    }
+  }
+}

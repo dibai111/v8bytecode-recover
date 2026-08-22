@@ -45,3 +45,18 @@ test('allows partial recovery only when read-only residue is the sole quality is
   assert.equal(isReadOnlyOnlyResidue(unsafe), false);
   assert.match(partialRecoveryBanner, /^\/\/ v8bytecode-recover:/);
 });
+
+test('treats switch labels as control-flow boundaries', () => {
+  const source = [
+    'function serialize(value) {',
+    '  switch (value) {',
+    '    case "one":',
+    '      return 1',
+    '    default:',
+    '      return 0',
+    '  }',
+    '}',
+  ].join('\n');
+
+  assert.equal(qualityMetrics(source).unreachableStatements, 0);
+});

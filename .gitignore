@@ -1,5 +1,6 @@
 output/
 output-*/
+temp/
 coverage/
 *.log
 __pycache__/
@@ -8,3 +9,4 @@ __pycache__/
 skills-lock.json
 .DS_Store
 Thumbs.db
+runtime/

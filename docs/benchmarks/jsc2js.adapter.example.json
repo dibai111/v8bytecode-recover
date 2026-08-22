@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "id": "jsc2js",
+  "cwd": "D:/tools/jsc2js",
+  "disassemble": {
+    "command": "D:/tools/jsc2js/d8-windows.exe",
+    "args": ["-e", "loadjsc('{input}')"]
+  },
+  "recover": {
+    "command": "python",
+    "args": ["View8/view8.py", "--disassembled", "{disassembly}", "{output}"]
+  }
+}

@@ -437,6 +437,23 @@ def _render_single_try_catch(
         else len(instructions)
     )
 
+    # Older V8 layouts can omit the normal-path jump after a try range. The
+    # compiler still emits a conditional branch immediately before the range
+    # that skips the handler region, so recover that branch as the guard.
+    if resume_offset is None:
+        for candidate in reversed(instructions[:try_start_idx]):
+            target = parse_jump_target(candidate)
+            if (
+                target is not None
+                and target > entry.end
+                and candidate.mnemonic.startswith("JumpIf")
+            ):
+                resume_offset = target
+                suffix_start_idx = _instruction_index_at_or_after(
+                    instructions, target
+                )
+                break
+
     try_instrs = instructions[try_start_idx:try_end_idx]
     if not try_instrs:
         return None
@@ -539,6 +556,9 @@ def _render_single_try_catch(
         translator.context_slot_names.update(catch_slot_names)
         catch_lines = _render_handler_fragment(
             ctx, translator, catch_body_instrs, remaining_entries
+        )
+        catch_lines, _ = _rewrite_catch_rethrows(
+            catch_lines, instructions, catch_name
         )
     finally:
         translator.context_slot_names = original_slot_names
@@ -763,6 +783,45 @@ def _rewrite_handler_region_escapes(
     return out, changed
 
 
+def _rewrite_catch_rethrows(
+    lines: List[str],
+    instructions: List[Instruction],
+    catch_name: str,
+) -> tuple[List[str], bool]:
+    """Recover conditional rethrows encoded as jumps into a handler tail."""
+    offset_to_index = {
+        instruction.offset: index
+        for index, instruction in enumerate(instructions)
+        if instruction.offset >= 0
+    }
+    out: List[str] = []
+    changed = False
+    for line in lines:
+        conditional = re.match(
+            r"^(\s*)if \((.+)\) goto offset_(\d+)$", line
+        )
+        if not conditional:
+            out.append(line)
+            continue
+        target_index = offset_to_index.get(int(conditional.group(3)))
+        target_window = (
+            instructions[target_index : target_index + 4]
+            if target_index is not None
+            else []
+        )
+        if not any(
+            instruction.mnemonic in {"Throw", "ReThrow"}
+            for instruction in target_window
+        ):
+            out.append(line)
+            continue
+        out.append(
+            f"{conditional.group(1)}if ({conditional.group(2)}) throw {catch_name}"
+        )
+        changed = True
+    return out, changed
+
+
 def _entry_fits_fragment(instructions: List[Instruction], entry) -> bool:
     if not instructions:
         return False
@@ -830,6 +889,18 @@ def _handler_collapse_layout(instructions: List[Instruction], entry):
                 resume_offset = following.offset
             if resume_offset is not None:
                 break
+    if resume_offset is None:
+        # Legacy handlers can end with Return and fall directly into a normal
+        # suffix. In that layout, an incoming branch is the only suffix marker.
+        handler_offset = instructions[handler_idx].offset
+        incoming_targets = [
+            target
+            for instruction in instructions[:handler_idx]
+            if (target := parse_jump_target(instruction)) is not None
+            and target > handler_offset
+        ]
+        if incoming_targets:
+            resume_offset = min(incoming_targets)
     if resume_offset is None:
         return None
 
@@ -953,7 +1024,13 @@ def _collapse_handler_regions(
     marker = Instruction(
         offset=marker_offset,
         mnemonic="RecoveredTryCatch",
-        args=[],
+        args=(
+            ["terminal"]
+            if try_instrs[-1].mnemonic in {"Return", "Throw", "ReThrow"}
+            and catch_body_instrs
+            and catch_body_instrs[-1].mnemonic in {"Return", "Throw", "ReThrow"}
+            else []
+        ),
         raw_line="",
     )
     recovered_regions = {
@@ -985,7 +1062,7 @@ def render_level4(
     translator: InstructionTranslator,
     instructions: List[Instruction],
 ) -> List[str]:
-    if translator.is_async_generator:
+    if translator.is_generator:
         instructions = _prepare_generator_instructions(translator, instructions)
     legacy_recovered = _render_simple_try_catch(
         ctx, bytecode, translator, instructions
@@ -1128,7 +1205,13 @@ def decompile_bytecode(ctx: DecompilerContext, bytecode: V8BytecodeArray, level:
 
     translator = InstructionTranslator(ctx, bytecode)
     instructions = [Instruction.from_codeline(raw) for raw in bytecode.instructions]
-    function_keyword = "async function*" if translator.is_async_generator else "function"
+    function_keyword = (
+        "async function*"
+        if translator.is_async_generator
+        else "function*"
+        if translator.is_generator
+        else "function"
+    )
     header = f"{function_keyword} {fn_name}({_format_params(bytecode)}) {{"
 
     markers: List[str] = []

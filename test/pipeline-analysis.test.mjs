@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { sourceRecoveryEntryPath } from '../src/config/paths.mjs';
+import { sourceRecoveryEntryPath } from '../src/cli/paths.mjs';
 import { recoverSources } from '../src/pipeline/recover-source.mjs';
 
 test('emits source analysis and split functions for disassembled input', () => {
@@ -14,7 +14,11 @@ test('emits source analysis and split functions for disassembled input', () => {
   const split = path.join(root, 'split');
   const reportPath = path.join(root, 'report.json');
   fs.mkdirSync(input);
-  fs.writeFileSync(path.join(input, 'sample.disassembly.txt'), 'placeholder\n', 'utf8');
+  fs.writeFileSync(
+    path.join(input, 'sample.disassembly.txt'),
+    '# disassembler V8 14.7.57\n# embedder_compatibility=exact-runtime-variant runtime_variant=legacy flags_status=known\nplaceholder\n',
+    'utf8',
+  );
 
   const backend = {
     disassemble() {
@@ -53,7 +57,11 @@ test('emits source analysis and split functions for disassembled input', () => {
     assert.equal(fs.existsSync(path.join(output, '.analysis', 'sample.functions.json')), true);
     assert.equal(fs.existsSync(path.join(output, '.analysis', 'sample.callgraph.json')), true);
     assert.equal(fs.existsSync(path.join(split, 'sample', 'index.json')), true);
-    assert.equal(JSON.parse(fs.readFileSync(reportPath, 'utf8')).counts.succeeded, 1);
+    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    assert.equal(report.counts.succeeded, 1);
+    assert.equal(report.files[0].profileVersion, '14.7.57');
+    assert.equal(report.files[0].compatibilityStatus, 'exact-runtime-variant');
+    assert.equal(report.files[0].detectedRuntimeVariant, 'legacy');
   } finally {
     process.exitCode = undefined;
     fs.rmSync(root, { recursive: true, force: true });

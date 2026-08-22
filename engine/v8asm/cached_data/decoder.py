@@ -5,18 +5,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
+import re
 import struct
 from pathlib import Path
 
+from .compatibility import build_compatibility_report
 from .header import CacheHeader, parse_header
 from .legacy_snapshot import (
     LegacySnapshotImage,
+    embedded_read_only_heap_sections,
     locate_legacy_snapshot,
     parse_legacy_snapshot,
 )
 from .profiles import Profile, ProfileSet, load_profiles
 from .object_stream import ObjectStreamParser, ParseError, Reference, SerializedObject
 from .snapshot import ReadOnlySnapshot
+
+# Placeholder magic used when wrapping an embedded read-only section in the
+# external snapshot-blob layout; callers compare against the cached-data magic.
+_EMBEDDED_BLOB_MAGIC_PLACEHOLDER = 0xC0DE0562
 
 
 @dataclass(frozen=True)
@@ -529,9 +536,32 @@ def _parse_snapshot(
     profile: Profile,
     tagged_size: int,
     objects: list[SerializedObject],
+    blob_magic: int | None = None,
+    ro_checksum: int | None = None,
 ) -> ReadOnlySnapshot | LegacySnapshotImage:
     if profile.has_ro_snapshot_checksum:
-        return ReadOnlySnapshot.parse(snapshot_blob, profile, tagged_size)
+        try:
+            return ReadOnlySnapshot.parse(snapshot_blob, profile, tagged_size)
+        except ValueError:
+            pass
+        for image in embedded_read_only_heap_sections(snapshot_blob, profile):
+            try:
+                return ReadOnlySnapshot.parse(
+                    image.external_blob(
+                        blob_magic
+                        if blob_magic is not None
+                        else _EMBEDDED_BLOB_MAGIC_PLACEHOLDER,
+                        ro_checksum,
+                    ),
+                    profile,
+                    tagged_size,
+                )
+            except ValueError:
+                continue
+        raise ValueError(
+            "snapshot does not match V8 "
+            f"{profile.version}; no embedded read-only section found"
+        )
     snapshot_data = locate_legacy_snapshot(snapshot_blob, profile)
     return parse_legacy_snapshot(
         snapshot_data,
@@ -559,6 +589,10 @@ def _map_name(obj: SerializedObject, profile: Profile) -> str | None:
 def _is_fixed_array(obj: SerializedObject, profile: Profile) -> bool:
     map_type = _map_type(obj, profile)
     return map_type in {"fixedarraymap", "fixedcowarraymap"}
+
+
+def _snake_case(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
 
 
 def _root_reference_name(reference: Reference, profile: Profile) -> str | None:
@@ -681,7 +715,10 @@ def _class_computed_entries(
     tagged_size: int,
 ) -> list[tuple[str, Reference | int, int, bool]] | None:
     root_name = _root_reference_name(reference, profile)
-    if root_name in {"empty_fixed_array", "empty_array_list"}:
+    if root_name is not None and _snake_case(root_name) in {
+        "empty_fixed_array",
+        "empty_array_list",
+    }:
         return []
     target = _target_object(reference, objects)
     if target is None:
@@ -706,7 +743,8 @@ def _class_element_entries(
     objects: list[SerializedObject],
     tagged_size: int,
 ) -> list[tuple[str, Reference | int, int, bool]] | None:
-    if _root_reference_name(reference, profile) in {
+    root_name = _root_reference_name(reference, profile)
+    if root_name is not None and _snake_case(root_name) in {
         "empty_slow_element_dictionary",
         "empty_fixed_array",
     }:
@@ -757,34 +795,50 @@ def _class_boilerplate_layout(
     list[tuple[str, Reference | int, int, bool]],
     list[tuple[str, Reference | int, int, bool]],
 ] | None:
-    values = _fixed_array_object_values(obj, tagged_size)
-    if len(values) != 7 or not isinstance(values[0], int) or values[0] < 3:
+    # Struct layout (V8 10.6+): map | arguments_count (int32, upper half of
+    # slot 1 for tagged_size=8) | six reference slots. The generic FixedArray
+    # reader misinterprets the non-Smi count as an array length, so decode the
+    # slots directly instead.
+    image, present = obj.image()
+    if obj.size < 2 * tagged_size + 6 * tagged_size:
         return None
-    if not all(isinstance(values[index], Reference) for index in range(1, 7)):
+    if tagged_size == 4:
+        count_offset = tagged_size
+        count = _read_u32(image, present, count_offset)
+    else:
+        count_offset = tagged_size + 4
+        count = _read_u32(image, present, count_offset)
+    if count is None or not all(present[tagged_size : tagged_size + tagged_size]):
         return None
+
+    references = []
+    for slot in range(2, 8):
+        reference = obj.references.get(slot * tagged_size)
+        if not isinstance(reference, Reference):
+            return None
+        references.append(reference)
+
     static_entries = _class_template_entries(
-        values[1], profile, objects, tagged_size
+        references[0], profile, objects, tagged_size
     )
     instance_entries = _class_template_entries(
-        values[4], profile, objects, tagged_size
+        references[3], profile, objects, tagged_size
     )
     static_elements = _class_element_entries(
-        values[2], profile, objects, tagged_size
+        references[1], profile, objects, tagged_size
     )
     instance_elements = _class_element_entries(
-        values[5], profile, objects, tagged_size
+        references[4], profile, objects, tagged_size
     )
     static_computed = _class_computed_entries(
-        values[3], profile, objects, tagged_size
+        references[2], profile, objects, tagged_size
     )
     instance_computed = _class_computed_entries(
-        values[6], profile, objects, tagged_size
+        references[5], profile, objects, tagged_size
     )
     if any(
         entries is None
         for entries in (
-            static_entries,
-            instance_entries,
             static_elements,
             instance_elements,
             static_computed,
@@ -792,8 +846,12 @@ def _class_boilerplate_layout(
         )
     ):
         return None
+    if static_entries is None or instance_entries is None:
+        return None
+    if count < 3:  # ClassBoilerplate::kFirstDynamicArgumentIndex
+        return None
     return (
-        values[0],
+        count,
         [*static_entries, *static_elements, *static_computed],
         [*instance_entries, *instance_elements, *instance_computed],
     )
@@ -839,12 +897,14 @@ def _scope_function_name(
 ) -> tuple[Reference | None, str | None]:
     image, present = obj.image()
     layout = profile.scope_info_layout
-    flags_offset = tagged_size
+    flags_offset = layout.flags_slot * tagged_size
     if layout.flags_encoding == "smi":
         flags = _read_smi(image, present, flags_offset, tagged_size)
     else:
         flags = _read_u32(image, present, flags_offset)
-    context_count = _read_smi(image, present, 3 * tagged_size, tagged_size)
+    context_count = _read_smi(
+        image, present, layout.context_count_slot * tagged_size, tagged_size
+    )
     if flags is None or context_count is None or not 0 <= context_count <= obj.size // tagged_size:
         return None, None
 
@@ -902,9 +962,46 @@ def _function_infos(
     arrays_by_object = {array.object_index: array for array in arrays}
     infos: dict[int, FunctionInfo] = {}
     layout = profile.shared_function_info_layout
-    for obj in objects:
-        if _map_type(obj, profile) != "sharedfunctioninfomap":
+
+    def function_name(obj: SerializedObject):
+        for slot in layout.name_or_scope_info_slots:
+            reference = obj.references.get(slot * tagged_size)
+            target = _target_object(reference, objects)
+            if target is not None and _map_type(target, profile) == "scopeinfomap":
+                name_reference, name_value = _scope_function_name(
+                    target, profile, objects, tagged_size, snapshot
+                )
+                return name_reference, name_value
+            value = (
+                _reference_string(reference, profile, objects, tagged_size, snapshot)
+                if reference is not None
+                else None
+            )
+            if reference is not None and value is not None:
+                return reference, value
+        return None, None
+
+    # Compiled functions own a BytecodeArray; lazy functions only reference an
+    # SFI map object. Record both so CreateClosure sites can use real names.
+    sfi_maps: list[SerializedObject] = [
+        obj
+        for obj in objects
+        if _map_type(obj, profile) == "sharedfunctioninfomap"
+    ]
+    compiled_arrays = set(arrays_by_object)
+    lazy_names: dict[int, str] = {}
+    for obj in sfi_maps:
+        if any(
+            (target := _target_object(obj.references.get(slot * tagged_size), objects))
+            is not None and target.index in compiled_arrays
+            for slot in layout.function_data_slots
+        ):
             continue
+        _, name_value = function_name(obj)
+        if name_value:
+            lazy_names[obj.index] = name_value
+
+    for obj in sfi_maps:
         array = None
         for slot in layout.function_data_slots:
             target = _target_object(obj.references.get(slot * tagged_size), objects)
@@ -914,25 +1011,16 @@ def _function_infos(
         if array is None:
             continue
 
-        name_reference = None
-        name_value = None
-        for slot in layout.name_or_scope_info_slots:
-            reference = obj.references.get(slot * tagged_size)
-            target = _target_object(reference, objects)
-            if target is not None and _map_type(target, profile) == "scopeinfomap":
-                name_reference, name_value = _scope_function_name(
-                    target, profile, objects, tagged_size, snapshot
-                )
-                break
-            value = _reference_string(
-                reference, profile, objects, tagged_size, snapshot
-            )
-            if reference is not None and value is not None:
-                name_reference, name_value = reference, value
-                break
+        name_reference, name_value = function_name(obj)
         infos[obj.index] = FunctionInfo(
             obj.index, array.object_index, name_reference, name_value
         )
+
+    # Expose lazy-function names as pseudo entries keyed by the SFI map index so
+    # constant-pool rendering can resolve "<SharedFunctionInfo>" placeholders.
+    for index, name in lazy_names.items():
+        if index not in infos:
+            infos[index] = FunctionInfo(index, -1, None, name)
     return infos
 
 
@@ -1187,10 +1275,19 @@ def _render_reachable_objects(
             image, present = target.image()
             layout = profile.scope_info_layout
             if layout.flags_encoding == "smi":
-                flags = _read_smi(image, present, tagged_size, tagged_size)
+                flags = _read_smi(
+                    image, present, layout.flags_slot * tagged_size, tagged_size
+                )
             else:
-                flags = _read_u32(image, present, tagged_size)
-            context_count = _read_smi(image, present, 3 * tagged_size, tagged_size)
+                flags = _read_u32(
+                    image, present, layout.flags_slot * tagged_size
+                )
+            context_count = _read_smi(
+                image,
+                present,
+                layout.context_count_slot * tagged_size,
+                tagged_size,
+            )
             flags = flags if flags is not None else 0
             context_count = context_count if context_count is not None else 0
             scope_type = (flags >> layout.scope_type_shift) & layout.scope_type_mask
@@ -1314,7 +1411,20 @@ def _render_function_infos(
     arrays_by_object = {array.object_index: array for array in arrays}
     lines: list[str] = []
     for function in functions.values():
-        array = arrays_by_object[function.array_object_index]
+        array = arrays_by_object.get(function.array_object_index)
+        if array is None:
+            # Lazy (never-compiled) functions have no bytecode; still emit a
+            # name-only block so downstream name resolution sees the function.
+            if function.name_value:
+                lines.extend(
+                    [
+                        "",
+                        f"0x{_object_address(function.sfi_object_index):012x}: "
+                        "[SharedFunctionInfo]",
+                        f" - name: {function.name_value}",
+                    ]
+                )
+            continue
         lines.extend(
             [
                 "",
@@ -1405,9 +1515,22 @@ def _render(
             f"# magic=0x{header.magic:08x} "
             f"version_hash=0x{header.version_hash:08x} tagged_size={tagged_size}"
         )
+    compatibility = build_compatibility_report(
+        header,
+        profile,
+        runtime_variant,
+        getattr(snapshot, "checksum", None),
+    )
     lines = [
         f"# disassembler V8 {profile.version}",
         source,
+        f"# embedder_compatibility={compatibility['status']} "
+        f"runtime_variant={compatibility['runtime_variant']} "
+        f"flags_status={compatibility['flags_status']}",
+        f"# source_hash=0x{header.source_hash:08x} "
+        f"flags_hash=0x{header.flags_hash:08x} "
+        f"cpu_features={('0x%08x' % header.cpu_features) if header.cpu_features is not None else 'unknown'} "
+        f"snapshot_checksum={('0x%08x' % header.ro_snapshot_checksum) if header.ro_snapshot_checksum is not None else 'none'}",
         f"# bytecode_arrays={len(arrays)}",
     ]
     runtime_names = profile.runtime_names_for(header.flags_hash, runtime_variant)
@@ -1484,8 +1607,9 @@ def disassemble_bytes(
     runtime_variant: str | None = None,
     snapshot_blob: bytes | None = None,
     payload_offset: int | None = None,
+    profile_directory: str | Path | None = None,
 ) -> str:
-    profiles = load_profiles()
+    profiles = load_profiles(profile_directory)
     if payload_offset is None:
         header, profile = parse_header(data, profiles, version)
         payload = data[header.header_size : header.header_size + header.payload_length]
@@ -1523,7 +1647,12 @@ def disassemble_bytes(
             snapshot = None
             if snapshot_blob is not None:
                 snapshot = _parse_snapshot(
-                    snapshot_blob, profile, tagged_size, objects
+                    snapshot_blob,
+                    profile,
+                    tagged_size,
+                    objects,
+                    header.magic,
+                    header.ro_snapshot_checksum,
                 )
                 if not header.raw_payload and snapshot.magic != header.magic:
                     raise ValueError(
@@ -1559,6 +1688,7 @@ def disassemble_file(
     runtime_variant: str | None = None,
     snapshot_blob: str | Path | None = None,
     payload_offset: int | None = None,
+    profile_directory: str | Path | None = None,
 ) -> str:
     snapshot_data = (
         Path(snapshot_blob).read_bytes() if snapshot_blob is not None else None
@@ -1569,4 +1699,5 @@ def disassemble_file(
         runtime_variant,
         snapshot_data,
         payload_offset,
+        profile_directory,
     )

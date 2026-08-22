@@ -2,14 +2,17 @@
 
 import path from 'node:path';
 
-import { engineRoot } from '../src/config/paths.mjs';
+import { engineRoot } from '../src/cli/paths.mjs';
+import { argumentValue } from '../src/cli/argument-values.mjs';
+import { parseLanguage } from '../src/cli/language.mjs';
 import { inspectInput, renderInspection } from '../src/inspection/inspect-input.mjs';
+import { listEmbedders } from '../src/inspection/embedder-matrix.mjs';
 
 function usage() {
   console.log(`V8 Blob 診斷工具
 
 Usage:
-  node bin/v8bytecode-inspect.mjs <blob-or-directory> [--json]
+  node bin/v8bytecode-inspect.mjs <blob-or-directory> [--profile-dir <dir>] [--embedder <name>] [--language zh-TW|zh-CN] [--json]
 
 功能:
   顯示 raw blob 的大小、SHA-256、V8 version hash、內建 profile、header、payload
@@ -17,9 +20,34 @@ Usage:
 }
 
 function parseArguments(argv) {
-  const options = { input: null, json: false, help: false };
-  for (const argument of argv) {
+  const options = {
+    input: null,
+    profileDirectory: null,
+    embedder: 'unknown',
+    language: 'zh-TW',
+    json: false,
+    help: false,
+  };
+  const embedderNames = new Set(listEmbedders(engineRoot).map((item) => item.id));
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
     if (argument === '--json') options.json = true;
+    else if (argument === '--profile-dir') {
+      options.profileDirectory = argumentValue(argv, index, argument);
+      index += 1;
+      options.profileDirectory = path.resolve(options.profileDirectory);
+    }
+    else if (argument === '--embedder') {
+      options.embedder = argumentValue(argv, index, argument);
+      index += 1;
+      if (!embedderNames.has(options.embedder)) {
+        throw new Error(`--embedder must be one of: ${[...embedderNames].join(', ')}`);
+      }
+    }
+    else if (argument === '--language') {
+      options.language = parseLanguage(argumentValue(argv, index, argument), argument);
+      index += 1;
+    }
     else if (argument === '-h' || argument === '--help') options.help = true;
     else if (!argument.startsWith('-') && !options.input) options.input = path.resolve(argument);
     else throw new Error(`Unknown option: ${argument}`);
@@ -31,10 +59,16 @@ function parseArguments(argv) {
 function main(argv = process.argv.slice(2)) {
   const options = parseArguments(argv);
   if (options.help) return usage();
-  const items = inspectInput(options.input, engineRoot);
+  const items = inspectInput(
+    options.input,
+    engineRoot,
+    'auto',
+    options.profileDirectory,
+    options.embedder,
+  );
   process.stdout.write(options.json
     ? `${JSON.stringify(items, null, 2)}\n`
-    : renderInspection(items));
+    : renderInspection(items, options.language));
 }
 
 try {

@@ -153,7 +153,7 @@
       "name": "LdaConstant",
       "opcode": 19,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -162,7 +162,7 @@
       "opcode": 20,
       "operands": [
         "Reg",
-        "ContextSlot",
+        "Idx",
         "UImm"
       ]
     },
@@ -172,7 +172,7 @@
       "opcode": 21,
       "operands": [
         "Reg",
-        "ContextSlot",
+        "Idx",
         "UImm"
       ]
     },
@@ -182,7 +182,7 @@
       "opcode": 22,
       "operands": [
         "Reg",
-        "ContextSlot",
+        "Idx",
         "UImm"
       ]
     },
@@ -191,7 +191,7 @@
       "name": "LdaCurrentContextSlotNoCell",
       "opcode": 23,
       "operands": [
-        "ContextSlot"
+        "Idx"
       ]
     },
     {
@@ -199,7 +199,7 @@
       "name": "LdaCurrentContextSlot",
       "opcode": 24,
       "operands": [
-        "ContextSlot"
+        "Idx"
       ]
     },
     {
@@ -207,7 +207,7 @@
       "name": "LdaImmutableCurrentContextSlot",
       "opcode": 25,
       "operands": [
-        "ContextSlot"
+        "Idx"
       ]
     },
     {
@@ -282,8 +282,8 @@
       "name": "LdaGlobal",
       "opcode": 35,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -291,8 +291,8 @@
       "name": "LdaGlobalInsideTypeof",
       "opcode": 36,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -300,8 +300,8 @@
       "name": "StaGlobal",
       "opcode": 37,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -310,7 +310,7 @@
       "opcode": 38,
       "operands": [
         "Reg",
-        "ContextSlot",
+        "Idx",
         "UImm"
       ]
     },
@@ -319,7 +319,7 @@
       "name": "StaCurrentContextSlotNoCell",
       "opcode": 39,
       "operands": [
-        "ContextSlot"
+        "Idx"
       ]
     },
     {
@@ -328,7 +328,7 @@
       "opcode": 40,
       "operands": [
         "Reg",
-        "ContextSlot",
+        "Idx",
         "UImm"
       ]
     },
@@ -337,7 +337,7 @@
       "name": "StaCurrentContextSlot",
       "opcode": 41,
       "operands": [
-        "ContextSlot"
+        "Idx"
       ]
     },
     {
@@ -345,7 +345,7 @@
       "name": "LdaLookupSlot",
       "opcode": 42,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -353,8 +353,8 @@
       "name": "LdaLookupContextSlotNoCell",
       "opcode": 43,
       "operands": [
-        "ConstantPoolIndex",
-        "ContextSlot",
+        "Idx",
+        "Idx",
         "UImm"
       ]
     },
@@ -363,8 +363,8 @@
       "name": "LdaLookupContextSlot",
       "opcode": 44,
       "operands": [
-        "ConstantPoolIndex",
-        "ContextSlot",
+        "Idx",
+        "Idx",
         "UImm"
       ]
     },
@@ -373,8 +373,8 @@
       "name": "LdaLookupGlobalSlot",
       "opcode": 45,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot",
+        "Idx",
+        "Idx",
         "UImm"
       ]
     },
@@ -383,7 +383,7 @@
       "name": "LdaLookupSlotInsideTypeof",
       "opcode": 46,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -391,8 +391,8 @@
       "name": "LdaLookupContextSlotNoCellInsideTypeof",
       "opcode": 47,
       "operands": [
-        "ConstantPoolIndex",
-        "ContextSlot",
+        "Idx",
+        "Idx",
         "UImm"
       ]
     },
@@ -401,8 +401,8 @@
       "name": "LdaLookupContextSlotInsideTypeof",
       "opcode": 48,
       "operands": [
-        "ConstantPoolIndex",
-        "ContextSlot",
+        "Idx",
+        "Idx",
         "UImm"
       ]
     },
@@ -411,8 +411,8 @@
       "name": "LdaLookupGlobalSlotInsideTypeof",
       "opcode": 49,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot",
+        "Idx",
+        "Idx",
         "UImm"
       ]
     },
@@ -421,7 +421,7 @@
       "name": "StaLookupSlot",
       "opcode": 50,
       "operands": [
-        "ConstantPoolIndex",
+        "Idx",
         "Flag8"
       ]
     },
@@ -431,8 +431,8 @@
       "opcode": 51,
       "operands": [
         "Reg",
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -441,8 +441,8 @@
       "opcode": 52,
       "operands": [
         "Reg",
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -451,7 +451,7 @@
       "opcode": 53,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -462,7 +462,7 @@
         "Reg",
         "Reg",
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -489,8 +489,8 @@
       "opcode": 57,
       "operands": [
         "Reg",
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -499,8 +499,8 @@
       "opcode": 58,
       "operands": [
         "Reg",
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -510,7 +510,7 @@
       "operands": [
         "Reg",
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -521,7 +521,7 @@
         "Reg",
         "Reg",
         "Flag8",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -531,7 +531,7 @@
       "operands": [
         "Reg",
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -542,7 +542,7 @@
         "Reg",
         "Reg",
         "Flag8",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -550,8 +550,8 @@
       "name": "SetPrototypeProperties",
       "opcode": 63,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -560,7 +560,7 @@
       "opcode": 64,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -569,7 +569,7 @@
       "opcode": 65,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -578,7 +578,7 @@
       "opcode": 66,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -587,7 +587,7 @@
       "opcode": 67,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -596,7 +596,7 @@
       "opcode": 68,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -605,7 +605,7 @@
       "opcode": 69,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -614,7 +614,7 @@
       "opcode": 70,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -623,7 +623,7 @@
       "opcode": 71,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -632,7 +632,7 @@
       "opcode": 72,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -641,7 +641,7 @@
       "opcode": 73,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -650,7 +650,7 @@
       "opcode": 74,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -659,7 +659,7 @@
       "opcode": 75,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -668,7 +668,7 @@
       "opcode": 76,
       "operands": [
         "Reg",
-        "FeedbackSlot",
+        "Idx",
         "Flag8"
       ]
     },
@@ -678,7 +678,7 @@
       "opcode": 77,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -687,7 +687,7 @@
       "opcode": 78,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -696,7 +696,7 @@
       "opcode": 79,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -705,7 +705,7 @@
       "opcode": 80,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -714,7 +714,7 @@
       "opcode": 81,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -723,7 +723,7 @@
       "opcode": 82,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -732,7 +732,7 @@
       "opcode": 83,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -741,7 +741,7 @@
       "opcode": 84,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -750,7 +750,7 @@
       "opcode": 85,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -759,7 +759,7 @@
       "opcode": 86,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -768,7 +768,7 @@
       "opcode": 87,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -777,7 +777,7 @@
       "opcode": 88,
       "operands": [
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -785,7 +785,7 @@
       "name": "Inc",
       "opcode": 89,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -793,7 +793,7 @@
       "name": "Dec",
       "opcode": 90,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -801,7 +801,7 @@
       "name": "Negate",
       "opcode": 91,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -809,7 +809,7 @@
       "name": "BitwiseNot",
       "opcode": 92,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -829,7 +829,7 @@
       "name": "TypeOf",
       "opcode": 95,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -874,7 +874,7 @@
         "Reg",
         "RegList",
         "RegCount",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -885,7 +885,7 @@
         "Reg",
         "RegList",
         "RegCount",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -894,7 +894,7 @@
       "opcode": 102,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -904,7 +904,7 @@
       "operands": [
         "Reg",
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -915,7 +915,7 @@
         "Reg",
         "Reg",
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -926,7 +926,7 @@
         "Reg",
         "RegList",
         "RegCount",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -978,7 +978,7 @@
         "Reg",
         "RegList",
         "RegCount",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -989,7 +989,7 @@
         "Reg",
         "RegList",
         "RegCount",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -998,7 +998,7 @@
       "opcode": 112,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1007,7 +1007,7 @@
       "opcode": 113,
       "operands": [
         "Reg",
-        "EmbeddedFeedback"
+        "Flag16"
       ]
     },
     {
@@ -1016,7 +1016,7 @@
       "opcode": 114,
       "operands": [
         "Reg",
-        "EmbeddedFeedback"
+        "Flag16"
       ]
     },
     {
@@ -1025,7 +1025,7 @@
       "opcode": 115,
       "operands": [
         "Reg",
-        "EmbeddedFeedback"
+        "Flag16"
       ]
     },
     {
@@ -1034,7 +1034,7 @@
       "opcode": 116,
       "operands": [
         "Reg",
-        "EmbeddedFeedback"
+        "Flag16"
       ]
     },
     {
@@ -1043,7 +1043,7 @@
       "opcode": 117,
       "operands": [
         "Reg",
-        "EmbeddedFeedback"
+        "Flag16"
       ]
     },
     {
@@ -1052,7 +1052,7 @@
       "opcode": 118,
       "operands": [
         "Reg",
-        "EmbeddedFeedback"
+        "Flag16"
       ]
     },
     {
@@ -1061,7 +1061,7 @@
       "opcode": 119,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1070,7 +1070,7 @@
       "opcode": 120,
       "operands": [
         "Reg",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1084,7 +1084,7 @@
       "name": "ToNumber",
       "opcode": 122,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1092,7 +1092,7 @@
       "name": "ToNumeric",
       "opcode": 123,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1120,8 +1120,8 @@
       "name": "CreateRegExpLiteral",
       "opcode": 127,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot",
+        "Idx",
+        "Idx",
         "Flag16"
       ]
     },
@@ -1130,8 +1130,8 @@
       "name": "CreateArrayLiteral",
       "opcode": 128,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot",
+        "Idx",
+        "Idx",
         "Flag8"
       ]
     },
@@ -1146,7 +1146,7 @@
       "name": "CreateEmptyArrayLiteral",
       "opcode": 130,
       "operands": [
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1154,8 +1154,8 @@
       "name": "CreateObjectLiteral",
       "opcode": 131,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot",
+        "Idx",
+        "Idx",
         "Flag8"
       ]
     },
@@ -1172,7 +1172,7 @@
       "operands": [
         "Reg",
         "Flag8",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1180,8 +1180,8 @@
       "name": "GetTemplateObject",
       "opcode": 134,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -1189,8 +1189,8 @@
       "name": "CreateClosure",
       "opcode": 135,
       "operands": [
-        "ConstantPoolIndex",
-        "FeedbackSlot",
+        "Idx",
+        "Idx",
         "Flag8"
       ]
     },
@@ -1199,7 +1199,7 @@
       "name": "CreateBlockContext",
       "opcode": 136,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1208,7 +1208,7 @@
       "opcode": 137,
       "operands": [
         "Reg",
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1216,7 +1216,7 @@
       "name": "CreateFunctionContext",
       "opcode": 138,
       "operands": [
-        "ConstantPoolIndex",
+        "Idx",
         "UImm"
       ]
     },
@@ -1225,7 +1225,7 @@
       "name": "CreateFunctionContextWithCells",
       "opcode": 139,
       "operands": [
-        "ConstantPoolIndex",
+        "Idx",
         "UImm"
       ]
     },
@@ -1234,7 +1234,7 @@
       "name": "CreateEvalContext",
       "opcode": 140,
       "operands": [
-        "ConstantPoolIndex",
+        "Idx",
         "UImm"
       ]
     },
@@ -1244,7 +1244,7 @@
       "opcode": 141,
       "operands": [
         "Reg",
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1272,7 +1272,7 @@
       "operands": [
         "UImm",
         "Imm",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1288,7 +1288,7 @@
       "name": "JumpConstant",
       "opcode": 147,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1296,7 +1296,7 @@
       "name": "JumpIfNullConstant",
       "opcode": 148,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1304,7 +1304,7 @@
       "name": "JumpIfNotNullConstant",
       "opcode": 149,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1312,7 +1312,7 @@
       "name": "JumpIfUndefinedConstant",
       "opcode": 150,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1320,7 +1320,7 @@
       "name": "JumpIfNotUndefinedConstant",
       "opcode": 151,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1328,7 +1328,7 @@
       "name": "JumpIfUndefinedOrNullConstant",
       "opcode": 152,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1336,7 +1336,7 @@
       "name": "JumpIfTrueConstant",
       "opcode": 153,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1344,7 +1344,7 @@
       "name": "JumpIfFalseConstant",
       "opcode": 154,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1352,7 +1352,7 @@
       "name": "JumpIfJSReceiverConstant",
       "opcode": 155,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1360,7 +1360,7 @@
       "name": "JumpIfForInDoneConstant",
       "opcode": 156,
       "operands": [
-        "ConstantPoolIndex",
+        "Idx",
         "Reg",
         "Reg"
       ]
@@ -1370,7 +1370,7 @@
       "name": "JumpIfToBooleanTrueConstant",
       "opcode": 157,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1378,7 +1378,7 @@
       "name": "JumpIfToBooleanFalseConstant",
       "opcode": 158,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1476,7 +1476,7 @@
       "name": "SwitchOnSmiNoFeedback",
       "opcode": 170,
       "operands": [
-        "ConstantPoolIndex",
+        "Idx",
         "UImm",
         "Imm"
       ]
@@ -1495,7 +1495,7 @@
       "opcode": 172,
       "operands": [
         "RegOutTriple",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1506,7 +1506,7 @@
         "Reg",
         "Reg",
         "RegPair",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1525,7 +1525,7 @@
         "Reg",
         "Reg",
         "RegOutPair",
-        "FeedbackSlot"
+        "Idx"
       ]
     },
     {
@@ -1557,7 +1557,7 @@
       "name": "ThrowReferenceErrorIfHole",
       "opcode": 180,
       "operands": [
-        "ConstantPoolIndex"
+        "Idx"
       ]
     },
     {
@@ -1586,7 +1586,7 @@
       "opcode": 184,
       "operands": [
         "Reg",
-        "ConstantPoolIndex",
+        "Idx",
         "UImm"
       ]
     },
@@ -1617,8 +1617,8 @@
       "opcode": 187,
       "operands": [
         "Reg",
-        "FeedbackSlot",
-        "FeedbackSlot"
+        "Idx",
+        "Idx"
       ]
     },
     {
@@ -1632,7 +1632,7 @@
       "name": "IncBlockCounter",
       "opcode": 189,
       "operands": [
-        "CoverageSlot"
+        "Idx"
       ]
     },
     {
@@ -1640,7 +1640,7 @@
       "name": "Abort",
       "opcode": 190,
       "operands": [
-        "AbortReason"
+        "Flag8"
       ]
     },
     {
@@ -1746,7 +1746,25 @@
       "operands": []
     }
   ],
+  "cache_header_layout": {
+    "alignment": 8,
+    "base_size": 28,
+    "checksum_offsets": [
+      24
+    ],
+    "code_stub_key_count_offset": null,
+    "cpu_features_offset": null,
+    "external_reference_count_offset": null,
+    "flags_offset": 12,
+    "name": "read-only-checksum",
+    "payload_offset": 20,
+    "reservation_count_offset": null,
+    "ro_snapshot_offset": 16,
+    "source_offset": 8,
+    "version_offset": 4
+  },
   "has_ro_snapshot_checksum": true,
+  "header_format": "read-only-checksum",
   "intrinsic_names": [
     "AsyncFunctionAwait",
     "AsyncFunctionEnter",
@@ -5004,7 +5022,9 @@
     ]
   },
   "scope_info_layout": {
+    "context_count_slot": 3,
     "flags_encoding": "uint32",
+    "flags_slot": 1,
     "function_variable_mask": 3,
     "function_variable_shift": 12,
     "inferred_function_name_bit": 14,
@@ -5023,11 +5043,18 @@
     "AttachedReference": 8,
     "Backref": 4,
     "ClearedWeakReference": 23,
+    "DoubleAlignmentSentinel": 0,
     "EmbedderFieldsData": 15,
+    "EmptyBackingStoreRefSentinel": 0,
     "ExternalReference": 19,
+    "FirstEncodableFixedRawDataSize": 1,
+    "FirstEncodableRepeatRootCount": 2,
     "FixedRawData": 96,
+    "FixedRawDataCount": 32,
     "FixedRepeatRoot": 128,
+    "FixedRepeatRootCount": 16,
     "HotObject": 144,
+    "HotObjectCount": 8,
     "IndirectPointerPrefix": 29,
     "InitializeSelfIndirectPointer": 30,
     "JSDispatchEntry": 32,
@@ -5043,6 +5070,7 @@
     "ResolvePendingForwardRef": 26,
     "RootArray": 7,
     "RootArrayConstants": 64,
+    "RootArrayConstantsCount": 32,
     "SandboxedApiReference": 20,
     "SandboxedExternalReference": 21,
     "SandboxedRawExternalReference": 22,
@@ -5062,6 +5090,7 @@
     ]
   },
   "snapshot_spaces": 4,
+  "source_layout": "modern-torque",
   "static_root_area_start": null,
   "static_root_maps": {},
   "version": "14.7.57",

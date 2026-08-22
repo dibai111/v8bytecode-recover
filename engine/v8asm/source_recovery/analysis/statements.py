@@ -63,3 +63,29 @@ class LoopStatement(Statement):
             lines.extend(stmt.render(indent + 1))
         lines.append(f"{INDENT * indent}}}")
         return lines
+
+
+@dataclass
+class SwitchCase:
+    values: List[str] = field(default_factory=list)
+    body: List[Statement] = field(default_factory=list)
+
+
+@dataclass
+class SwitchStatement(Statement):
+    subject: str
+    cases: List[SwitchCase] = field(default_factory=list)
+    default_branch: List[Statement] = field(default_factory=list)
+
+    def render(self, indent: int = 0) -> List[str]:
+        lines = [f"{INDENT * indent}switch ({self.subject}) {{"]
+        for case in self.cases:
+            for value in case.values:
+                lines.append(f"{INDENT * (indent + 1)}case {value}:")
+            for stmt in case.body:
+                lines.extend(stmt.render(indent + 2))
+        lines.append(f"{INDENT * (indent + 1)}default:")
+        for stmt in self.default_branch:
+            lines.extend(stmt.render(indent + 2))
+        lines.append(f"{INDENT * indent}}}")
+        return lines

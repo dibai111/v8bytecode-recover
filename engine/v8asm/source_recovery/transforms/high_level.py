@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import List
 
 from .binary import (
@@ -162,6 +163,7 @@ def _normalize_block_indentation(lines: List[str]) -> List[str]:
     base = min(len(_extract_indent(line)) for line in nonempty)
     base_indent = " " * base
     depth = 0
+    switch_stack = []
     out: List[str] = []
 
     for line in lines:
@@ -172,10 +174,27 @@ def _normalize_block_indentation(lines: List[str]) -> List[str]:
 
         if stripped.startswith("}"):
             depth = max(0, depth - 1)
+            while switch_stack and depth < switch_stack[-1]["label_depth"]:
+                switch_stack.pop()
 
-        out.append(f"{base_indent}{'  ' * depth}{stripped}")
+        is_case = bool(re.match(r"(?:case\b.+|default)\s*:", stripped))
+        current_switch = (
+            switch_stack[-1]
+            if switch_stack and switch_stack[-1]["label_depth"] == depth
+            else None
+        )
+        if is_case and current_switch is not None:
+            current_switch["active"] = True
+
+        active_cases = sum(1 for item in switch_stack if item["active"])
+        if is_case and current_switch is not None:
+            active_cases -= 1
+
+        out.append(f"{base_indent}{'  ' * (depth + active_cases)}{stripped}")
 
         if stripped.endswith("{"):
             depth += 1
+            if re.match(r"switch\s*\(.+\)\s*\{$", stripped):
+                switch_stack.append({"label_depth": depth, "active": False})
 
     return out

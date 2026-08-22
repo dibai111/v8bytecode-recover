@@ -106,6 +106,29 @@ class InstructionTranslator:
             and instr.args[0].strip("[]").startswith("AsyncGenerator")
             for instr in instructions
         )
+        self.is_async_function = any(
+            instr.mnemonic == "InvokeIntrinsic"
+            and instr.args
+            and instr.args[0].strip("[]") in {
+                "AsyncFunctionEnter",
+                "AsyncFunctionAwaitCaught",
+                "AsyncFunctionAwaitUncaught",
+                "AsyncFunctionResolve",
+                "AsyncFunctionReject",
+            }
+            for instr in instructions
+        )
+        self.is_generator = not self.is_async_function and (
+            self.is_async_generator or any(
+                instr.mnemonic == "SwitchOnGeneratorState"
+                or (
+                    instr.mnemonic == "InvokeIntrinsic"
+                    and instr.args
+                    and instr.args[0].strip("[]") == "CreateJSGeneratorObject"
+                )
+                for instr in instructions
+            )
+        )
         self.constants: Dict[int, ConstantPoolEntry] = {
             entry.index: entry for entry in context.constant_pool_entries(bytecode)
         }
@@ -752,6 +775,12 @@ class InstructionTranslator:
         )
         if intrinsic == "CreateJSGeneratorObject":
             return ""
+        if intrinsic == "CreateIterResultObject" and self.is_generator:
+            value = registers[0] if registers else "undefined"
+            done = registers[1] if len(registers) > 1 else "false"
+            if done in {"true", "1"}:
+                return f"ACCU = {value}"
+            return f"ACCU = yield {value}"
         if intrinsic == "AsyncGeneratorAwaitUncaught":
             value = registers[1] if len(registers) > 1 else "undefined"
             return f"ACCU = await {value}"
@@ -918,6 +947,13 @@ class InstructionTranslator:
         value = _parse_bracket_number(instr.args[0]) if instr.args else None
         return f"ACCU = (ACCU * {value})"
 
+    def _op_Exp(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? ** ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} ** ACCU)"
+
     def _op_ExpSmi(self, instr: Instruction) -> str:
         args = self._drop_feedback(instr.args, 2)
         value = _parse_bracket_number(args[0]) if args else None
@@ -945,6 +981,17 @@ class InstructionTranslator:
         value = _parse_number_token(instr.args[0]) if instr.args else None
         return f"ACCU = (ACCU & {value})"
 
+    def _op_BitwiseXor(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? ^ ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} ^ ACCU)"
+
+    def _op_BitwiseXorSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU ^ {value})"
+
     def _op_BitwiseNot(self, instr: Instruction) -> str:
         return "ACCU = ~ACCU"
 
@@ -970,6 +1017,17 @@ class InstructionTranslator:
         value = _parse_number_token(instr.args[0]) if instr.args else None
         return f"ACCU = (ACCU >> {value})"
 
+    def _op_ShiftRightLogical(self, instr: Instruction) -> str:
+        args = self._drop_feedback(instr.args, 1)
+        if not args:
+            return "ACCU = (? >>> ACCU)"
+        left = self._reg_name(args[0])
+        return f"ACCU = ({left} >>> ACCU)"
+
+    def _op_ShiftRightLogicalSmi(self, instr: Instruction) -> str:
+        value = _parse_number_token(instr.args[0]) if instr.args else None
+        return f"ACCU = (ACCU >>> {value})"
+
     def _op_Div(self, instr: Instruction) -> str:
         args = self._drop_feedback(instr.args, 1)
         if not args:
@@ -991,6 +1049,9 @@ class InstructionTranslator:
     def _op_ModSmi(self, instr: Instruction) -> str:
         value = _parse_number_token(instr.args[0]) if instr.args else None
         return f"ACCU = (ACCU % {value})"
+
+    def _op_Negate(self, instr: Instruction) -> str:
+        return "ACCU = -ACCU"
 
     def _op_Mov(self, instr: Instruction) -> str:
         if len(instr.args) < 2:
@@ -1207,6 +1268,9 @@ class InstructionTranslator:
     def _op_TestUndefined(self, instr: Instruction) -> str:
         return "ACCU = (ACCU === undefined)"
 
+    def _op_TestNull(self, instr: Instruction) -> str:
+        return "ACCU = (ACCU === null)"
+
     def _op_TestInstanceOf(self, instr: Instruction) -> str:
         if not instr.args:
             return "ACCU = (? instanceof ACCU)"
@@ -1231,6 +1295,9 @@ class InstructionTranslator:
     def _op_SetPendingMessage(self, instr: Instruction) -> str:
         return "// SetPendingMessage"
 
+    def _op_Debugger(self, instr: Instruction) -> str:
+        return ""
+
     def _op_ReThrow(self, instr: Instruction) -> str:
         return "throw ACCU"
 
@@ -1253,6 +1320,10 @@ class InstructionTranslator:
         return "ACCU = typeof ACCU"
 
     def _op_ToNumeric(self, instr: Instruction) -> str:
+        return "ACCU = Number(ACCU)"
+
+    def _op_ToNumber(self, instr: Instruction) -> str:
+        """Lower the legacy V8 ToNumber bytecode used by older profiles."""
         return "ACCU = Number(ACCU)"
 
     def _op_ToObject(self, instr: Instruction) -> str:

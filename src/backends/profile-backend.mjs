@@ -5,6 +5,7 @@ import { runPython } from '../runtime/processes.mjs';
 function cachedDataArguments(blobPath, options, snapshotPath) {
   const args = ['-m', 'cached_data', blobPath];
   if (options.profile) args.push('--version', options.profile);
+  if (options.profileDirectory) args.push('--profile-dir', options.profileDirectory);
   if (snapshotPath) args.push('--snapshot-blob', snapshotPath);
   if (options.runtimeVariant) args.push('--runtime-variant', options.runtimeVariant);
   if (options.payloadOffset !== null) args.push('--payload-offset', String(options.payloadOffset));
