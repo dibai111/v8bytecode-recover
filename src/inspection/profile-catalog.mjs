@@ -98,8 +98,4 @@ function loadProfileCatalog(engineRoot, profileDirectory = null) {
   return catalog;
 }
 
-function findProfileByHash(catalog, versionHash) {
-  return catalog.profiles.find((profile) => profile.versionHash === versionHash) ?? null;
-}
-
-export { findProfileByHash, loadProfileCatalog };
+export { loadProfileCatalog };

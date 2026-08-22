@@ -1,6 +1,41 @@
 import path from 'node:path';
 
-import { argumentValue, commaSeparatedValues } from './argument-values.mjs';
+const supportedLanguages = Object.freeze(['zh-TW', 'zh-CN']);
+
+function argumentValue(argv, index, option, { allowLeadingDash = false } = {}) {
+  const value = argv[index + 1];
+  if (value === undefined || value.length === 0
+    || !allowLeadingDash && value.startsWith('-')) {
+    throw new Error(`${option} requires a value`);
+  }
+  return value;
+}
+
+function commaSeparatedValues(value, option) {
+  const values = value.split(',').map((item) => item.trim()).filter(Boolean);
+  if (values.length === 0) throw new Error(`${option} requires at least one value`);
+  return values;
+}
+
+function parseLanguage(value, option = '--language') {
+  if (!supportedLanguages.includes(value)) {
+    throw new Error(`${option} must be zh-TW or zh-CN`);
+  }
+  return value;
+}
+
+function positionalArgument(argumentsList, valueOptions = ['--profile-dir']) {
+  const options = new Set(valueOptions);
+  for (let index = 0; index < argumentsList.length; index += 1) {
+    const argument = argumentsList[index];
+    if (options.has(argument)) {
+      index += 1;
+      continue;
+    }
+    if (!argument.startsWith('-')) return argument;
+  }
+  return null;
+}
 
 function usage() {
   console.log(`V8 cached bytecode to JavaScript
@@ -270,4 +305,12 @@ function parseArguments(argv, defaultOutputPath) {
   return options;
 }
 
-export { parseArguments, usage };
+export {
+  argumentValue,
+  commaSeparatedValues,
+  parseArguments,
+  parseLanguage,
+  positionalArgument,
+  supportedLanguages,
+  usage,
+};

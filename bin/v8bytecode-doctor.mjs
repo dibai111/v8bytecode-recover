@@ -2,10 +2,10 @@
 
 import path from 'node:path';
 
-import { inspectEnvironment, renderEnvironment } from '../src/diagnostics/environment.mjs';
+import { inspectEnvironment, renderEnvironment } from '../src/inspection/environment.mjs';
 import { engineRoot } from '../src/cli/paths.mjs';
-import { argumentValue } from '../src/cli/argument-values.mjs';
-import { parseLanguage } from '../src/cli/language.mjs';
+import { argumentValue } from '../src/cli/options.mjs';
+import { parseLanguage } from '../src/cli/options.mjs';
 
 function parseArguments(argv) {
   const options = {

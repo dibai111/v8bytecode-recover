@@ -57,14 +57,9 @@ function assessEmbedderCompatibility(engineRoot, embedder, compatibility) {
   };
 }
 
-function getEmbedderPolicy(engineRoot, embedder = 'unknown') {
-  const matrix = loadEmbedderMatrix(engineRoot);
-  return matrix.embedders[embedder] ?? matrix.embedders.unknown;
-}
-
 function listEmbedders(engineRoot) {
   return Object.entries(loadEmbedderMatrix(engineRoot).embedders)
     .map(([id, entry]) => ({ id, label: entry.label }));
 }
 
-export { assessEmbedderCompatibility, getEmbedderPolicy, listEmbedders, loadEmbedderMatrix };
+export { assessEmbedderCompatibility, listEmbedders, loadEmbedderMatrix };

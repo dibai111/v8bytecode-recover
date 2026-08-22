@@ -67,10 +67,10 @@ param(
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $callerPath = (Get-Location).Path
-Import-Module (Join-Path $projectRoot 'powershell/V8Blob.Localization.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $projectRoot 'powershell/V8BytecodeRecover.Localization.psm1') -Force -ErrorAction Stop
 Set-V8Language -Language $Language
-Import-Module (Join-Path $projectRoot 'powershell/V8Blob.Menu.psm1') -Force
-Import-Module (Join-Path $projectRoot 'powershell/V8Blob.Actions.psm1') -Force
+Import-Module (Join-Path $projectRoot 'powershell/V8BytecodeRecover.Menu.psm1') -Force
+Import-Module (Join-Path $projectRoot 'powershell/V8BytecodeRecover.Actions.psm1') -Force
 
 function Resolve-V8CallerPath {
     param([string]$Value)
@@ -99,7 +99,7 @@ $SplitFunctionsPath = Resolve-V8CallerPath $SplitFunctionsPath
 
 try {
     if ($Action -eq 'menu' -and -not $InputPath) {
-        $exitCode = Start-V8BlobMenu -ProjectRoot $projectRoot -Language $Language
+        $exitCode = Start-RecoverMenu -ProjectRoot $projectRoot -Language $Language
     }
     else {
         if ($Action -eq 'menu') { $Action = 'recover' }

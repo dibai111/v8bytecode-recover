@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 
-Import-Module (Join-Path $PSScriptRoot 'V8Blob.Actions.psm1') -Force
-Import-Module (Join-Path $PSScriptRoot 'V8Blob.Localization.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'V8BytecodeRecover.Actions.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'V8BytecodeRecover.Localization.psm1') -Force -ErrorAction Stop
 
 function ConvertTo-V8MenuPath {
     param([string]$Value)
@@ -111,7 +111,7 @@ function Invoke-V8MenuConversion {
     return $code
 }
 
-function Start-V8BlobMenu {
+function Start-RecoverMenu {
     param(
         [Parameter(Mandatory = $true)]
         [string]$ProjectRoot,
@@ -181,4 +181,4 @@ function Start-V8BlobMenu {
     }
 }
 
-Export-ModuleMember -Function Start-V8BlobMenu
+Export-ModuleMember -Function Start-RecoverMenu

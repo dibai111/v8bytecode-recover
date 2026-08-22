@@ -12,6 +12,13 @@ from .utils import parse_jump_target
 UNCONDITIONAL_JUMPS = {"Jump", "JumpConstant"}
 LOOP_JUMPS = {"JumpLoop", "JumpLoopConstant"}
 TERMINATORS = {"Return", "Throw", "ReThrow"}
+# Integer jump-table dispatch: every table entry is an implicit branch target,
+# so the dispatch ends a block and each case target starts one.
+SWITCH_DISPATCHES = {"SwitchOnSmiNoFeedback"}
+
+
+def is_switch_dispatch(mnemonic: str) -> bool:
+    return mnemonic in SWITCH_DISPATCHES
 
 
 def is_conditional(mnemonic: str) -> bool:
@@ -43,7 +50,10 @@ class LoopRegion:
     end: int
 
 
-def build_basic_blocks(instructions: List[Instruction]) -> List[BasicBlock]:
+def build_basic_blocks(
+    instructions: List[Instruction],
+    extra_leaders: Optional[Set[int]] = None,
+) -> List[BasicBlock]:
     if not instructions:
         return []
 
@@ -52,6 +62,8 @@ def build_basic_blocks(instructions: List[Instruction]) -> List[BasicBlock]:
     }
     sorted_offsets = sorted(offset_to_index.keys())
     leaders: Set[int] = set(sorted_offsets[:1])
+    if extra_leaders:
+        leaders.update(target for target in extra_leaders if target in offset_to_index)
 
     def next_offset(idx: int) -> Optional[int]:
         for nxt in instructions[idx + 1 :]:
@@ -76,7 +88,7 @@ def build_basic_blocks(instructions: List[Instruction]) -> List[BasicBlock]:
             nxt = next_offset(idx)
             if nxt is not None:
                 leaders.add(nxt)
-        elif instr.mnemonic in TERMINATORS:
+        elif instr.mnemonic in TERMINATORS or is_switch_dispatch(instr.mnemonic):
             nxt = next_offset(idx)
             if nxt is not None:
                 leaders.add(nxt)

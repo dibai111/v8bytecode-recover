@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { positionalArgument } from '../src/cli/positional.mjs';
+import { positionalArgument } from '../src/cli/options.mjs';
 
 test('skips option values when locating profile identify input', () => {
   assert.equal(

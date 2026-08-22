@@ -13,6 +13,7 @@ from .cfg import (
     is_conditional,
     is_loop_jump,
     is_unconditional_jump,
+    is_switch_dispatch,
     TERMINATORS,
 )
 from .statements import (
@@ -26,6 +27,9 @@ from .statements import (
 )
 from .translator import InstructionTranslator
 from .utils import parse_jump_target, strip_trailing_goto
+
+SWITCH_TABLE_MNEMONIC = "SwitchOnSmiNoFeedback"
+_CASE_BODY_STOPPERS = ("return ", "throw ", "break", "continue", "goto offset_")
 
 
 class Structurer:
@@ -112,6 +116,10 @@ class Structurer:
         term = instructions[-1]
         body_instrs = instructions[:-1] if len(instructions) > 1 else []
 
+        smi_switch = self._build_smi_switch(block_idx, stop_offset)
+        if smi_switch is not None:
+            return smi_switch
+
         if is_conditional(term.mnemonic):
             terminal_switch = self._build_terminal_switch(block_idx, stop_offset)
             if terminal_switch is not None:
@@ -180,6 +188,159 @@ class Structurer:
         if text:
             statements.append(SimpleStatement(text))
         return statements, block_idx + 1
+
+    def _smi_switch_table(
+        self, instr
+    ) -> Optional[List[Tuple[int, int]]]:
+        """Resolve a SwitchOnSmiNoFeedback jump table into (value, target) pairs."""
+        if instr.mnemonic != SWITCH_TABLE_MNEMONIC or len(instr.args) < 3:
+            return None
+        numbers: List[int] = []
+        for token in instr.args[:3]:
+            match = re.fullmatch(r"\[(-?\d+)\]", token.strip())
+            if not match:
+                return None
+            numbers.append(int(match.group(1)))
+        table_index, table_size, first_case = numbers
+        if table_size <= 0:
+            return None
+        entries: List[Tuple[int, int]] = []
+        for position in range(table_size):
+            entry = self.translator.constants.get(table_index + position)
+            if entry is None:
+                return None
+            display = entry.display.strip()
+            if not re.fullmatch(r"-?\d+", display):
+                return None
+            target = instr.offset + int(display)
+            if target <= instr.offset:
+                return None
+            entries.append((first_case + position, target))
+        return entries
+
+    def smi_switch_jump_targets(
+        self, instructions: List[Instruction]
+    ) -> Set[int]:
+        """Collect every case-target offset reachable through a jump table."""
+        targets: Set[int] = set()
+        index_by_offset = {
+            instr.offset: idx for idx, instr in enumerate(instructions)
+        }
+        for instr in instructions:
+            if instr.mnemonic != SWITCH_TABLE_MNEMONIC:
+                continue
+            entries = self._smi_switch_table(instr)
+            if not entries:
+                continue
+            for _, target in entries:
+                if target in index_by_offset:
+                    targets.add(target)
+        return targets
+
+    def _build_smi_switch(
+        self, block_idx: int, stop_offset: Optional[int]
+    ) -> Optional[Tuple[List[Statement], int]]:
+        """Recover an integer jump-table dispatch as a switch statement.
+
+        Case targets were registered as basic-block leaders, so each case body
+        occupies its own block range; the fallthrough after the dispatch is the
+        default branch. Every target must fall inside the current region so
+        bodies are emitted without crossing enclosing structure boundaries.
+        """
+        block = self.blocks[block_idx]
+        term = block.terminator
+        if term is None or not is_switch_dispatch(term.mnemonic):
+            return None
+        entries = self._smi_switch_table(term)
+        if not entries:
+            return None
+
+        subject = self._switch_subject(block)
+        if subject is None:
+            return None
+
+        targets = sorted({target for _, target in entries})
+        if any(target >= stop_offset for target in targets) if stop_offset is not None else False:
+            return None
+        target_indices = {
+            target: self.offset_to_index.get(target) for target in targets
+        }
+        if any(idx is None for idx in target_indices.values()):
+            return None
+
+        default_target = self.blocks[block_idx + 1].start
+        if stop_offset is not None and default_target >= stop_offset:
+            return None
+        ordered_targets = sorted(set(targets) | {default_target})
+        boundary_by_target = {
+            target: (
+                ordered_targets[i + 1] if i + 1 < len(ordered_targets) else stop_offset
+            )
+            for i, target in enumerate(ordered_targets)
+        }
+        grouped: Dict[int, List[str]] = {}
+        for value, target in entries:
+            grouped.setdefault(target, []).append(str(value))
+
+        cases: List[SwitchCase] = []
+        for target in ordered_targets:
+            body, _ = self._emit_region(target, boundary_by_target[target])
+            strip_trailing_goto(body, target)
+            if target != default_target:
+                self._ensure_case_break(body)
+            cases.append(SwitchCase(values=grouped.get(target, []), body=body))
+
+        named_cases = [case for case in cases if case.values]
+        default_branch = next(
+            (case.body for case in cases if not case.values), None
+        )
+        prefix = [
+            SimpleStatement(text)
+            for text in (
+                self.translator.translate(instr).strip()
+                for instr in block.instructions[:-1]
+            )
+            if text
+        ]
+        prefix.append(
+            SwitchStatement(
+                subject=subject,
+                cases=named_cases,
+                default_branch=default_branch,
+            )
+        )
+
+        resume = self.offset_to_index.get(
+            ordered_targets[-1], len(self.blocks)
+        )
+        return prefix, len(self.blocks) if resume == block_idx + 1 else resume
+
+    @staticmethod
+    def _ensure_case_break(body: List[Statement]) -> None:
+        for statement in reversed(body):
+            text = getattr(statement, "text", None)
+            if not isinstance(text, str):
+                continue
+            stripped = text.strip()
+            if stripped.startswith(_CASE_BODY_STOPPERS):
+                return
+            break
+        body.append(SimpleStatement("break"))
+
+    def _switch_subject(self, block: BasicBlock) -> Optional[str]:
+        for instr in reversed(block.instructions[:-1]):
+            text = self.translator.translate(instr).strip()
+            match = re.fullmatch(r"ACCU\s*=\s*(.+)", text)
+            if match:
+                expr = match.group(1).strip()
+                if "ACCU" in expr:
+                    return None
+                return expr
+            # Star-style stores keep the value alive; keep scanning upward.
+            if re.fullmatch(r"r\d+\s*=\s*ACCU", text) or text.startswith("//"):
+                continue
+            return None
+        return None
 
     def _build_terminal_switch(
         self, block_idx: int, stop_offset: Optional[int]
@@ -535,6 +696,7 @@ def decompile_to_statements(
     instructions: List[Instruction],
     recovered_regions: Optional[Dict[int, List[str]]] = None,
 ) -> List[Statement]:
-    blocks = build_basic_blocks(instructions)
+    probe = Structurer(translator, build_basic_blocks(instructions), recovered_regions)
+    blocks = build_basic_blocks(instructions, extra_leaders=probe.smi_switch_jump_targets(instructions))
     structurer = Structurer(translator, blocks, recovered_regions)
     return structurer.build()

@@ -3,8 +3,8 @@
 import path from 'node:path';
 
 import { engineRoot } from '../src/cli/paths.mjs';
-import { argumentValue } from '../src/cli/argument-values.mjs';
-import { parseLanguage } from '../src/cli/language.mjs';
+import { argumentValue } from '../src/cli/options.mjs';
+import { parseLanguage } from '../src/cli/options.mjs';
 import { inspectInput, renderInspection } from '../src/inspection/inspect-input.mjs';
 import { listEmbedders } from '../src/inspection/embedder-matrix.mjs';
 

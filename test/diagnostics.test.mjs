@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderEnvironment } from '../src/diagnostics/environment.mjs';
+import { renderEnvironment } from '../src/inspection/environment.mjs';
 
 test('renders optional d8 separately from the built-in recovery capabilities', () => {
   const report = {

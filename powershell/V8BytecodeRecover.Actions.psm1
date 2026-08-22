@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-Import-Module (Join-Path $PSScriptRoot 'V8Blob.Node.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'V8BytecodeRecover.Node.psm1') -Force
 
 function Add-V8Argument {
     param(

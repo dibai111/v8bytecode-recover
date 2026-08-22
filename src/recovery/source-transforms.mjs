@@ -97,6 +97,28 @@ function lowerScriptContextBootstrap(source) {
   ].join('\n');
 }
 
+function dropResidualScriptContextHelpers(source) {
+  // When the strict bootstrap cleanup cannot prove every script slot binding,
+  // a top-level `pushContext(create_block_context(...))` line still leaks into
+  // output and fails the residue gate. Once the body no longer reads the bare
+  // `context` register, the helper pair and its parent-context restore are
+  // pure scaffolding and can go.
+  const helperPattern = /^\s*[A-Za-z_$][\w$]* = pushContext\(create_(?:block|function)_context\(.*\)\)\s*;?\s*$/;
+  const restorePattern = /^\s*context\s*=\s*[A-Za-z_$][\w$]*\s*;?\s*$/;
+  const lines = source.split('\n');
+  if (!lines.some((line) => helperPattern.test(line))) return source;
+
+  const strippedStrings = (line) => (
+    line.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g, '')
+  );
+  const readsBareContext = lines.some((line) => {
+    if (helperPattern.test(line) || restorePattern.test(line)) return false;
+    return /\bcontext\b/.test(strippedStrings(line));
+  });
+  if (readsBareContext) return source;
+  return lines.filter((line) => !helperPattern.test(line) && !restorePattern.test(line)).join('\n');
+}
+
 function topLevelFunctionBlocks(lines) {
   const starts = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -1774,6 +1796,7 @@ function normalizeDerivedSource(source) {
   lowered = recoverAsyncFunctions(lowered);
   lowered = removeInternalMetadataComments(lowered);
   lowered = lowerTopLevelScriptScaffolding(lowered);
+  lowered = dropResidualScriptContextHelpers(lowered);
   lowered = lowerInternalHelperCalls(lowered);
   lowered = simplifyProvenBoundMethodCalls(lowered);
   lowered = removeUnreferencedOrphanBytecodeFunctions(lowered);

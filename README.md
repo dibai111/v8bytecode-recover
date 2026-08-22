@@ -277,7 +277,7 @@ v8bytecode-recover.ps1    PowerShell 主入口（預設繁體中文）
 v8bytecode-recover-zh-*.ps1  繁中/簡中薄 wrapper
 powershell/               PowerShell actions、menu、localization、Node runner
 bin/                      recover、inspect、doctor、profiles、benchmark CLI
-src/                      輸入、pipeline、analysis、validation 及 reporting
+src/                      CLI、pipeline、analysis、backends、validation 及 reporting
 engine/v8asm/             V8 profiles、cached-data decoder、source recovery
 docs/                     profile 生成指南、命令例子及 benchmark 設定
 test/                     Node 內建測試

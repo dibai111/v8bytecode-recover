@@ -4,10 +4,11 @@ try:
     from .analysis.instruction import Instruction
     from .analysis.translator import InstructionTranslator
     from .context import DecompilerContext
-    from .core import _prepare_generator_instructions
+    from .core import _prepare_generator_instructions, render_level4
     from .transforms.pipeline import simplify_lines
     from .model import V8Address, V8ArrayBoilerplateDescription
     from .model.bytecode import V8BytecodeArray
+    from .model.arrays import V8TrustedFixedArray
     from .transforms.high_level import _normalize_block_indentation
 except ImportError:  # unittest discover with source_recovery as the top-level path.
     import sys
@@ -17,13 +18,17 @@ except ImportError:  # unittest discover with source_recovery as the top-level p
     from source_recovery.analysis.instruction import Instruction  # type: ignore[no-redef]
     from source_recovery.analysis.translator import InstructionTranslator  # type: ignore[no-redef]
     from source_recovery.context import DecompilerContext  # type: ignore[no-redef]
-    from source_recovery.core import _prepare_generator_instructions  # type: ignore[no-redef]
+    from source_recovery.core import (  # type: ignore[no-redef]
+        _prepare_generator_instructions,
+        render_level4,
+    )
     from source_recovery.transforms.pipeline import simplify_lines  # type: ignore[no-redef]
     from source_recovery.model import (  # type: ignore[no-redef]
         V8Address,
         V8ArrayBoilerplateDescription,
     )
     from source_recovery.model.bytecode import V8BytecodeArray  # type: ignore[no-redef]
+    from source_recovery.model.arrays import V8TrustedFixedArray  # type: ignore[no-redef]
     from source_recovery.transforms.high_level import (  # type: ignore[no-redef]
         _normalize_block_indentation,
     )
@@ -101,6 +106,64 @@ class SourceRecoveryTests(unittest.TestCase):
         context = DecompilerContext([boilerplate])
 
         self.assertEqual(context._format_array_boilerplate(boilerplate), "[]")
+
+    def test_switch_on_smi_jump_table_recovers_a_switch_statement(self):
+        bytecode = V8BytecodeArray(
+            0x300,
+            "BytecodeArray",
+            [
+                "0x00000300 <BytecodeArray 0x300> (constant_pool_size = 7)",
+                "Parameter count 2",
+                "Constant pool (size = 7)",
+                "Register count 4",
+                "Frame size 32",
+                "0x00000300 @ 0 : Ldar a0",
+                "0x00000304 @ 4 : SwitchOnSmiNoFeedback [4], [3], [1]",
+                "0x00000308 @ 8 : LdaSmi [40]",
+                "0x0000030c @ 12 : Return",
+                "0x00000310 @ 16 : LdaSmi [41]",
+                "0x00000314 @ 20 : Return",
+                "0x00000318 @ 24 : LdaSmi [42]",
+                "0x0000031c @ 28 : Return",
+                "0x00000320 @ 32 : LdaZero",
+                "0x00000324 @ 36 : Return",
+            ],
+        )
+        bytecode.parse()
+        instructions = [
+            Instruction.from_codeline(line) for line in bytecode.instructions
+        ]
+        # Table starts at pool index 4 ([4] operand); deltas are relative to the
+        # dispatch at offset 4: cases 1/2/3 land on offsets 16/20/24, and the
+        # fallthrough (offset 8) is the default branch.
+        pool = V8TrustedFixedArray(
+            bytecode.address + 1,
+            "TrustedFixedArray",
+            [
+                "- length: 7",
+                "0: 0",
+                "1: 0",
+                "2: 0",
+                "3: 0",
+                "4: 12",
+                "5: 16",
+                "6: 20",
+            ],
+        )
+        pool.parse()
+        ctx = DecompilerContext([bytecode, pool])
+        self.assertIn(bytecode.address, ctx.bytecode_constant_pools)
+        translator = InstructionTranslator(ctx, bytecode)
+
+        lines = render_level4(ctx, bytecode, translator, instructions)
+
+        joined = "\n".join(lines)
+        self.assertIn("switch (", joined)
+        self.assertIn("case 1:", joined)
+        self.assertIn("case 2:", joined)
+        self.assertIn("case 3:", joined)
+        self.assertLess(joined.index("case 1:"), joined.index("case 2:"))
+        self.assertNotIn("SwitchOnSmiNoFeedback", joined)
 
     def test_regular_generator_is_detected_and_yields_values(self):
         bytecode = V8BytecodeArray(

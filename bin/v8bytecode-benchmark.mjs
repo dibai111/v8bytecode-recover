@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { benchmark } from '../src/benchmark/runner.mjs';
 import { loadCorpusManifest } from '../src/benchmark/corpus.mjs';
-import { argumentValue, commaSeparatedValues } from '../src/cli/argument-values.mjs';
+import { argumentValue, commaSeparatedValues } from '../src/cli/options.mjs';
 
 function parseArguments(argv) {
   const options = {
