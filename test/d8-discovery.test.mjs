@@ -5,7 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
 
-import { candidateD8Paths, discoverD8, probeD8 } from '../src/runtime/d8-discovery.mjs';
+import { candidateD8Paths, discoverD8, probeD8 } from '../src/backends/d8-discovery.mjs';
 
 test('discovers configured d8 candidates without invoking a shell', () => {
   const candidates = candidateD8Paths({

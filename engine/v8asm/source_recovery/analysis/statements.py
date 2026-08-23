@@ -56,11 +56,26 @@ class IfStatement(Statement):
 class LoopStatement(Statement):
     condition: str
     body: List[Statement] = field(default_factory=list)
+    # Bottom-tested loops (V8 emits the exit branch mid-body, before JumpLoop)
+    # keep that exit test in place as a trailing `if (cond) break`. Hoisting it
+    # into a while-header reads the tested operands after the body redefined
+    # them. Top-tested loops keep the classic `while (cond)` shape so every
+    # downstream cleanup pass still recognizes it.
+    bottom_tested: bool = False
 
     def render(self, indent: int = 0) -> List[str]:
-        lines = [f"{INDENT * indent}while ({self.condition}) {{"]
+        if not self.bottom_tested or self.condition == "true":
+            lines = [f"{INDENT * indent}while ({self.condition}) {{"]
+            for stmt in self.body:
+                lines.extend(stmt.render(indent + 1))
+            lines.append(f"{INDENT * indent}}}")
+            return lines
+        lines = [f"{INDENT * indent}while (true) {{"]
         for stmt in self.body:
             lines.extend(stmt.render(indent + 1))
+        lines.append(f"{INDENT * (indent + 1)}if ({self.condition}) {{")
+        lines.append(f"{INDENT * (indent + 2)}break")
+        lines.append(f"{INDENT * (indent + 1)}}}")
         lines.append(f"{INDENT * indent}}}")
         return lines
 

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeDerivedSource } from '../src/recovery/source-transforms.mjs';
-import { qualityMetrics } from '../src/validation/source-quality.mjs';
+import { normalizeDerivedSource } from '../src/analysis/source-transforms.mjs';
+import { qualityMetrics } from '../src/analysis/source-quality.mjs';
 
 test('recovers a nested guarded loop without leaving temporary residue', () => {
   const source = [

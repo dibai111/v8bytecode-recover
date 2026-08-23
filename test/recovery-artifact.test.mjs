@@ -9,7 +9,7 @@ import {
   parseRecoveryArtifact,
   readRecoveryArtifact,
   serializeRecoveryArtifact,
-} from '../src/io/recovery-artifact.mjs';
+} from '../src/recovery/artifact.mjs';
 
 test('round-trips a validated recovery artifact', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-artifact-test-'));

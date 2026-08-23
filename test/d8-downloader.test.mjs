@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ensureMatchingD8 } from '../src/runtime/d8-downloader.mjs';
+import { ensureMatchingD8 } from '../src/backends/d8-runtime.mjs';
 
 test('computes V8 version hashes matching bundled profiles', async () => {
   // 12.4.254.21 is a bundled profile with version hash 0x79dafe74; the

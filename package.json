@@ -17,9 +17,6 @@
     "engine/v8asm/cached_data/",
     "engine/v8asm/source_recovery/",
     "powershell/",
-    "v8bytecode-recover.ps1",
-    "v8bytecode-recover-zh-TW.ps1",
-    "v8bytecode-recover-zh-CN.ps1",
     "docs/"
   ],
   "engines": {

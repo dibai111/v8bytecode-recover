@@ -165,6 +165,62 @@ class SourceRecoveryTests(unittest.TestCase):
         self.assertLess(joined.index("case 1:"), joined.index("case 2:"))
         self.assertNotIn("SwitchOnSmiNoFeedback", joined)
 
+    def test_compare_chain_switch_recovers_with_default_inside_structure(self):
+        bytecode = V8BytecodeArray(
+            0x400,
+            "BytecodeArray",
+            [
+                # Real V8 shape for a small switch: compare chain with Mov
+                # shuffles, per-case bodies jumping to a shared exit, and the
+                # default body reached by the final unconditional Jump.
+                "0x00000400 @ 0 : Ldar a0",
+                "0x00000402 @ 2 : MulSmi [2], [0]",
+                "0x00000405 @ 5 : Star0",
+                "0x00000406 @ 6 : LdaSmi [6]",
+                "0x00000408 @ 8 : TestEqualStrict r0, [1]",
+                "0x0000040b @ 11 : Mov r0, r1",
+                "0x0000040e @ 14 : JumpIfTrue [11] (@ 25)",
+                "0x00000410 @ 16 : LdaSmi [8]",
+                "0x00000412 @ 18 : TestEqualStrict r1, [1]",
+                "0x00000415 @ 21 : JumpIfTrue [12] (@ 33)",
+                "0x00000417 @ 23 : Jump [18] (@ 41)",
+                "0x00000419 @ 25 : Ldar r0",
+                "0x0000041b @ 27 : MulSmi [10], [2]",
+                "0x0000041e @ 30 : Star0",
+                "0x00000420 @ 31 : Jump [13] (@ 44)",
+                "0x00000422 @ 33 : Ldar r0",
+                "0x00000424 @ 35 : SubSmi [1], [3]",
+                "0x00000427 @ 38 : Star0",
+                "0x00000429 @ 39 : Jump [5] (@ 44)",
+                "0x0000042b @ 41 : LdaSmi [-1]",
+                "0x0000042d @ 43 : Star0",
+                "0x0000042f @ 44 : Ldar r0",
+                "0x00000431 @ 46 : Return",
+            ],
+        )
+        bytecode.parse()
+        instructions = [
+            Instruction.from_codeline(line) for line in bytecode.instructions
+        ]
+        translator = InstructionTranslator(DecompilerContext([]), bytecode)
+
+        lines = render_level4(
+            DecompilerContext([]), bytecode, translator, instructions
+        )
+
+        joined = "\n".join(lines)
+        self.assertIn("switch (", joined)
+        self.assertIn("case 6:", joined)
+        self.assertIn("case 8:", joined)
+        self.assertIn("default:", joined)
+        # The default body must live inside the switch, not leak past it.
+        default_pos = joined.index("default:")
+        close_pos = joined.index("}", default_pos)
+        self.assertIn("= -1", joined[default_pos:close_pos])
+        self.assertNotIn("-1", joined[close_pos:])
+        # Case bodies need explicit breaks or the first case falls through.
+        self.assertIn("break", joined)
+
     def test_regular_generator_is_detected_and_yields_values(self):
         bytecode = V8BytecodeArray(
             0x100,

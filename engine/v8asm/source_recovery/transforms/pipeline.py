@@ -123,9 +123,17 @@ def simplify_lines(lines: List[str], recover_structures: bool = False) -> List[s
             if expr == "ACCU" and accu_value is not None:
                 if accu_alias is not None:
                     expr = accu_alias
-                elif "ACCU" not in accu_value and not _is_suspend_expression(accu_value):
+                elif (
+                    "ACCU" not in accu_value
+                    and not _is_suspend_expression(accu_value)
+                    # Only copy provably pure accumulator values into the
+                    # register store; duplicating an impure call would repeat
+                    # its side effects.
+                    and _is_simple_expr(accu_value)
+                ):
                     expr = accu_value
                 else:
+                    expr = "ACCU"
                     unstable_accu_alias = True
             elif expr == "ACCU":
                 unstable_accu_alias = True

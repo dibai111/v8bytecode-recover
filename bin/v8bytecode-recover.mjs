@@ -3,16 +3,16 @@
 import fs from 'node:fs';
 
 import { parseArguments, usage } from '../src/cli/options.mjs';
-import { createBackend } from '../src/backends/index.mjs';
+import { createBackend } from '../src/backends/registry.mjs';
 import {
   applicationRoot,
   defaultOutputPath,
   engineRoot,
   sourceRecoveryEntryPath,
 } from '../src/cli/paths.mjs';
-import { recoverSources } from '../src/pipeline/recover-source.mjs';
-import { ensureMatchingD8 } from '../src/runtime/d8-downloader.mjs';
-import { findInputs } from '../src/io/blob-files.mjs';
+import { recoverSources } from '../src/recovery/pipeline.mjs';
+import { ensureMatchingD8 } from '../src/backends/d8-runtime.mjs';
+import { findInputs } from '../src/recovery/blob-files.mjs';
 
 function firstRawInput(options) {
   const format = options.inputFormat ?? 'auto';
@@ -80,5 +80,3 @@ try {
   console.error(error.stack ?? error.message);
   process.exitCode = 1;
 }
-
-export { main };

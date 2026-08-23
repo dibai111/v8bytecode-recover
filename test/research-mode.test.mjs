@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { sourceRecoveryEntryPath } from '../src/cli/paths.mjs';
-import { recoverSources } from '../src/pipeline/recover-source.mjs';
+import { recoverSources } from '../src/recovery/pipeline.mjs';
 
 test('preserves a non-clean candidate in research mode without publishing it as JavaScript', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-research-test-'));

@@ -65,12 +65,14 @@ param(
     [string]$Embedder = 'unknown'
 )
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# The entrypoint lives in powershell/; the project root is one level up.
+$projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $callerPath = (Get-Location).Path
-Import-Module (Join-Path $projectRoot 'powershell/V8BytecodeRecover.Localization.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $scriptDir 'V8BytecodeRecover.Localization.psm1') -Force -ErrorAction Stop
 Set-V8Language -Language $Language
-Import-Module (Join-Path $projectRoot 'powershell/V8BytecodeRecover.Menu.psm1') -Force
-Import-Module (Join-Path $projectRoot 'powershell/V8BytecodeRecover.Actions.psm1') -Force
+Import-Module (Join-Path $scriptDir 'V8BytecodeRecover.Menu.psm1') -Force
+Import-Module (Join-Path $scriptDir 'V8BytecodeRecover.Actions.psm1') -Force
 
 function Resolve-V8CallerPath {
     param([string]$Value)

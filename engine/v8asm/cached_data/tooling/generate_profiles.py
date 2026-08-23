@@ -626,12 +626,6 @@ def parse_cache_header_layout(
     }
 
 
-def parse_cache_header_format(
-    code_serializer_source: str, serializer_source: str
-) -> str:
-    return str(parse_cache_header_layout(code_serializer_source, serializer_source)["name"])
-
-
 def parse_snapshot_spaces(source: str, tags: dict[str, int]) -> int:
     match = re.search(r"kNumberOfSpaces\s*=\s*(\d+)", source)
     if match:

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { qualityMetrics } from '../src/validation/source-quality.mjs';
+import { qualityMetrics } from '../src/analysis/source-quality.mjs';
 import {
   createPartialRecoverySource,
   isReadOnlyOnlyResidue,
   partialRecoveryBanner,
   replaceUnresolvedReadOnlyReferences,
-} from '../src/validation/unresolved-values.mjs';
+} from '../src/recovery/unresolved-values.mjs';
 
 test('replaces only unresolved read-only references with stable placeholders', () => {
   const source = [

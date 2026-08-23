@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { runExternalAdapter } from '../src/benchmark/external-adapter.mjs';
-import { evaluateCorpus } from '../src/benchmark/corpus.mjs';
-import { functionCount } from '../src/benchmark/runner.mjs';
+import { runExternalAdapter } from '../src/analysis/benchmark-adapter.mjs';
+import { evaluateCorpus } from '../src/analysis/benchmark-corpus.mjs';
+import { functionCount } from '../src/analysis/benchmark.mjs';
 
 test('runs a two-stage external adapter without a shell', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-external-adapter-test-'));

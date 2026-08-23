@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 
-import { runPython } from '../runtime/processes.mjs';
+import { runPython } from './processes.mjs';
 
 function cachedDataArguments(blobPath, options, snapshotPath) {
   const args = ['-m', 'cached_data', blobPath];

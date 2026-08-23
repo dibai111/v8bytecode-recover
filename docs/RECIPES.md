@@ -7,18 +7,18 @@ bytecode.
 ## Recover a directory
 
 ```powershell
-.\v8bytecode-recover-zh-TW.ps1 -Action recover `
+.\powershell\v8bytecode-recover-zh-TW.ps1 -Action recover `
   -InputPath .\input `
   -OutputPath .\output
 ```
 
-Use `v8bytecode-recover-zh-CN.ps1` for simplified Chinese prompts, or add
+Use `powershell/v8bytecode-recover-zh-CN.ps1` for simplified Chinese prompts, or add
 `-Language zh-CN` when calling the main script.
 
 ## Inspect before recovery
 
 ```powershell
-.\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
+.\powershell\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
 ```
 
 ## Generate an external profile pack

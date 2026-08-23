@@ -159,14 +159,30 @@ class InstructionTranslator:
         return None
 
     def _infer_context_chains(self) -> None:
-        current_chain = list(
+        initial_chain = list(
             self.context.captured_scopes.get(self.bytecode.address, [])
         )
+        current_chain = list(initial_chain)
         accumulator_chain: Optional[List[Optional[V8ScopeInfo]]] = None
         register_chains: Dict[str, List[Optional[V8ScopeInfo]]] = {}
+        # Code after a terminator is only reachable via a branch, so tracked
+        # register/context state from the preceding block must not leak into
+        # it (e.g. a catch handler's PushContext poisoning later slot loads).
+        terminators = {"Return", "ReThrow", "Throw", "Abort", "Jump", "JumpLoop"}
+        instructions = [
+            Instruction.from_codeline(raw) for raw in self.bytecode.instructions
+        ]
+        reset_offsets = {
+            instr.offset
+            for previous, instr in zip(instructions, instructions[1:])
+            if previous.mnemonic in terminators
+        }
 
-        for raw in self.bytecode.instructions:
-            instr = Instruction.from_codeline(raw)
+        for instr in instructions:
+            if instr.offset in reset_offsets:
+                current_chain = list(initial_chain)
+                register_chains.clear()
+                accumulator_chain = None
             self.context_chains_at_offset[instr.offset] = list(current_chain)
             self.register_context_chains_at_offset[instr.offset] = {
                 name: list(chain) for name, chain in register_chains.items()
@@ -322,6 +338,13 @@ class InstructionTranslator:
             scope_known, name = self._scope_name_at_offset(
                 instr, slot, depth, context_register
             )
+            if name and not name.startswith("scope_"):
+                return name
+            # Inferred evidence (hole-check names, catch bindings) outranks a
+            # synthetic scope fallback that only encodes the scope address.
+            hinted = self.context_slot_names.get((slot, depth))
+            if hinted:
+                return hinted
             if name:
                 return name
             if scope_known:

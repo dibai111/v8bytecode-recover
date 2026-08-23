@@ -10,7 +10,7 @@ import {
   findInputs,
   outputRelativePath,
   removeLegacyArtifacts,
-} from '../src/io/blob-files.mjs';
+} from '../src/recovery/blob-files.mjs';
 
 test('finds raw and disassembled inputs independently', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-files-test-'));

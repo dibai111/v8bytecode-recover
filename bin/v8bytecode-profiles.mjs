@@ -9,7 +9,7 @@ import { engineRoot as configuredEngineRoot } from '../src/cli/paths.mjs';
 import { positionalArgument } from '../src/cli/options.mjs';
 import { argumentValue } from '../src/cli/options.mjs';
 import { parseLanguage } from '../src/cli/options.mjs';
-import { inspectFile, renderInspection } from '../src/inspection/inspect-input.mjs';
+import { inspectFile, renderInspection } from '../src/cli/inspect-input.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const engineRoot = path.join(root, 'engine', 'v8asm');

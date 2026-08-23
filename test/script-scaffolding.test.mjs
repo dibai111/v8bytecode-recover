@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeDerivedSource } from '../src/recovery/source-transforms.mjs';
+import { normalizeDerivedSource } from '../src/analysis/source-transforms.mjs';
 
 test('removes top-level script bootstrap scaffolding', () => {
   const recovered = normalizeDerivedSource([

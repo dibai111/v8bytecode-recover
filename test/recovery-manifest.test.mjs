@@ -13,7 +13,7 @@ import {
   recoverySettingsFingerprint,
   updateRecoveryManifest,
   writeRecoveryManifest,
-} from '../src/io/recovery-manifest.mjs';
+} from '../src/recovery/manifest.mjs';
 
 function options(overrides = {}) {
   return {

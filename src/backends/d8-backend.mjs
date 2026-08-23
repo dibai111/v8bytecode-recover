@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { runProcess, runPython } from '../runtime/processes.mjs';
-import { discoverD8 } from '../runtime/d8-discovery.mjs';
+import { runProcess, runPython } from './processes.mjs';
+import { discoverD8 } from './d8-discovery.mjs';
 
 function createD8Backend({ d8Path, d8Directory, engineRoot, python, projectRoot }) {
   const discovery = discoverD8({

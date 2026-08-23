@@ -5,8 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { engineRoot } from '../src/cli/paths.mjs';
-import { inspectFile, inspectInput, renderInspection } from '../src/inspection/inspect-input.mjs';
-import { assessEmbedderCompatibility } from '../src/inspection/cache-header.mjs';
+import { inspectFile, inspectInput, renderInspection } from '../src/cli/inspect-input.mjs';
+import { assessEmbedderCompatibility } from '../src/recovery/cache-header.mjs';
 
 test('inspects a legacy V8 cached-data header', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-inspect-test-'));

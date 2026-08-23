@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from .common import (
     _compact_compound_assignments,
@@ -318,6 +318,9 @@ def _recover_for_of(lines: List[str]) -> List[str]:
     direct = _recover_direct_for_of(lines)
     if direct != lines:
         return direct
+    explicit = _recover_explicit_for_of(lines)
+    if explicit != lines:
+        return explicit
 
     setup = _parse_iter_setup(lines)
     if not setup:
@@ -518,19 +521,28 @@ def _recover_direct_for_of(lines: List[str]) -> List[str]:
 
         next_reg: Optional[str] = None
         if cursor + 1 < len(lines) and lines[cursor].strip() == f"ACCU = {iter_reg}.next":
+            next_line = lines[cursor + 1].strip()
             next_store = re.match(
                 rf"^(r\d+) = {re.escape(iter_reg)}\.next$",
-                lines[cursor + 1].strip(),
-            )
+                next_line,
+            ) or re.match(r"^(r\d+) = ACCU$", next_line)
             if not next_store:
                 continue
             next_reg = next_store.group(1)
             cursor += 2
 
         while_idx = None
+        bottom_tested = False
         for candidate in range(cursor, min(cursor + 10, len(lines))):
-            if lines[candidate].strip() == "while (!(truthy(ACCU))) {":
+            stripped_header = lines[candidate].strip()
+            if stripped_header == "while (!(truthy(ACCU))) {":
                 while_idx = candidate
+                break
+            # Async functions keep V8's bottom-tested loop shape: the exit
+            # test stays mid-body as `if (truthy(X.done)) { break }`.
+            if stripped_header == "while (true) {":
+                while_idx = candidate
+                bottom_tested = True
                 break
         if while_idx is None:
             continue
@@ -550,7 +562,756 @@ def _recover_direct_for_of(lines: List[str]) -> List[str]:
         flag_reg = flag_match.group(1) if flag_match else None
 
         parsed_body = _parse_direct_for_of_body(
-            lines, while_idx, while_end, iter_reg, next_reg, flag_reg
+            lines,
+            while_idx,
+            while_end,
+            iter_reg,
+            next_reg,
+            flag_reg,
+            bottom_tested,
+        )
+        if parsed_body is None:
+            continue
+        body_lines, aliases, flag_reg = parsed_body
+
+        cleanup = _find_direct_for_of_cleanup(
+            lines, while_end + 1, iter_reg, flag_reg
+        )
+        if cleanup is None:
+            continue
+        cleanup_end, return_status = cleanup
+        if return_status:
+            body_lines = _recover_for_of_return_completion(body_lines, return_status)
+
+        loop_var = "item"
+        body_text = "\n".join(body_lines)
+        suffix = 1
+        while re.search(rf"\b{re.escape(loop_var)}\b", body_text):
+            loop_var = f"item{suffix}"
+            suffix += 1
+
+        for alias in aliases:
+            cleaned: List[str] = []
+            for item in body_lines:
+                # V8 reuses the result register as a scratch temp (`rX = rY`
+                # with a non-result RHS). After folding, that store would
+                # corrupt the loop variable, and it is dead anyway.
+                store = re.match(
+                    rf"^({re.escape(alias)}) = ([^=]+)$", item.strip()
+                )
+                if (
+                    store
+                    and not re.search(rf"\b{re.escape(alias)}\b", store.group(2))
+                    and not store.group(2).startswith("ACCU")
+                ):
+                    continue
+                cleaned.append(
+                    re.sub(rf"\b{re.escape(alias)}\b", loop_var, item)
+                )
+            body_lines = cleaned
+
+        indent = _extract_indent(lines[while_idx])
+        replacement = [f"{indent}for (const {loop_var} of {source}) {{"]
+        replacement.extend(f"{indent}  {item.strip()}" for item in body_lines)
+        replacement.append(f"{indent}}}")
+        return lines[:setup_start] + replacement + lines[cleanup_end + 1 :]
+
+    return lines
+
+
+def _skip_jsreceiver_guard(
+    lines: List[str], index: int, subject: str
+) -> Optional[int]:
+    """Consume an IteratorGet-protection guard; return the line after it."""
+    if index >= len(lines):
+        return None
+    stripped = lines[index].strip()
+    lambda_guard = (
+        f"if (!(((value) => Object(value) === value)({subject}))) {{"
+    )
+    simple_guard = f"if (!(isJSReceiver({subject}))) {{"
+    accu_guard = "if (!(isJSReceiver(ACCU))) {"
+    if stripped not in {lambda_guard, simple_guard, accu_guard}:
+        return None
+    end = _find_block_end(lines, index)
+    if end is None:
+        return None
+    body = "\n".join(lines[index : end + 1])
+    if "throw new TypeError()" not in body and "TypeError" not in body:
+        return None
+    return end + 1
+
+
+def _parse_explicit_pair_pull(
+    body: List[str], index: int, iterator: str, done_flag: Optional[str]
+) -> Optional[Tuple[int, str, Optional[str]]]:
+    """Parse one `iterator.next()` result extraction feeding a target temp.
+
+    Handles the ACCU-threaded engine form (`ACCU = it.next()`, `rX = ACCU`)
+    and its register-direct variants, wrapped either bare or inside an
+    ``if (!(false)) { ... }`` block with an undefined-fallback else. A None
+    ``done_flag`` accepts any flag store and returns the one seen. Returns
+    (index after, target, flag).
+    """
+    if index >= len(body):
+        return None
+    if body[index].strip() == "if (!(false)) {":
+        pull_end = _find_block_end(body, index)
+        if pull_end is None:
+            return None
+        pull = [line.strip() for line in body[index + 1 : pull_end]]
+        tail_index = pull_end + 1
+    else:
+        header = re.match(
+            rf"^(?:(?:[\w$]+|ACCU) = )?{re.escape(iterator)}\.next\(\)$",
+            body[index].strip(),
+        )
+        if not header:
+            return None
+        end = index
+        while end < len(body):
+            stripped = body[end].strip()
+            if stripped == "}" and end + 1 < len(body) and body[end + 1].strip() == "else {":
+                else_end = _find_block_end(body, end + 1)
+                if else_end is not None:
+                    end = else_end
+                    break
+            end += 1
+        if end >= len(body):
+            return None
+        pull = [line.strip() for line in body[index : end + 1]]
+        tail_index = end + 1
+
+    cursor = 0
+
+    def expect(pattern: str) -> Optional[re.Match]:
+        nonlocal cursor
+        if cursor >= len(pull):
+            return None
+        match = re.match(pattern, pull[cursor])
+        if match:
+            cursor += 1
+        return match
+
+    next_reg = expect(rf"^([\w$]+|ACCU) = {re.escape(iterator)}\.next\(\)$")
+    if not next_reg:
+        return None
+    raw = next_reg.group(1)
+    alias_match = (
+        re.match(rf"^([\w$]+) = {raw}$", pull[cursor].strip())
+        if raw != "ACCU" and cursor < len(pull)
+        else None
+    )
+    subject = alias_match.group(1) if alias_match else ("r?" if raw == "ACCU" else raw)
+    if raw == "ACCU":
+        # `ACCU = it.next()` must be followed by a register copy.
+        copy_match = expect(rf"^([\w$]+) = ACCU$")
+        if not copy_match:
+            return None
+        subject = copy_match.group(1)
+    elif alias_match:
+        cursor += 1
+    guard = (
+        _skip_jsreceiver_guard(pull, cursor, subject)
+        or (raw != "ACCU" and _skip_jsreceiver_guard(pull, cursor, raw))
+        or None
+    )
+    if guard is None:
+        return None
+    cursor = guard
+
+    # done check: negative arm carries the value; positive arm carries break
+    # with the value extracted after the block.
+    positive = None
+    taken = expect(rf"^if \(!\({re.escape(subject)}\.done\)\) \{{$")
+    if not taken:
+        taken = expect(rf"^if \(!\(truthy\({re.escape(subject)}\.done\)\)\) \{{$")
+    if not taken and cursor < len(pull):
+        accu_done = re.match(rf"^ACCU = {re.escape(subject)}\.done$", pull[cursor].strip())
+        if accu_done:
+            cursor += 1
+            taken = expect(rf"^if \(!\(truthy\(ACCU\)\)\) \{{$") or expect(
+                rf"^if \(!\(ACCU\)\) \{{$"
+            )
+    if not taken and cursor < len(pull):
+        done_store = re.match(rf"^[\w$]+ = {re.escape(subject)}\.done$", pull[cursor].strip())
+        if done_store:
+            cursor += 1
+        taken = expect(rf"^if \(!\({re.escape(subject)}\.done\)\) \{{$") or expect(
+            rf"^if \(!\(truthy\({re.escape(subject)}\.done\)\)\) \{{$"
+        )
+    if not taken and cursor < len(pull):
+        positive = expect(rf"^if \(truthy\({re.escape(subject)}\.done\)\) \{{$") or expect(
+            rf"^if \({re.escape(subject)}\.done\) \{{$"
+        )
+    if not taken and not positive:
+        return None
+
+    target: Optional[str] = None
+    seen_flag: Optional[str] = done_flag
+    rest: List[str] = []
+    if positive:
+        pos_end = _find_block_end(pull, cursor - 1)
+        if pos_end is None:
+            return None
+        pos_body = [line.strip() for line in pull[cursor : pos_end]]
+        if pos_body != ["break"]:
+            return None
+        cursor = pos_end + 1
+        value_line = re.match(rf"^([\w$]+) = {re.escape(subject)}\.value$", pull[cursor].strip())
+        if not value_line:
+            return None
+        target = value_line.group(1)
+        cursor += 1
+        while cursor < len(pull):
+            line = pull[cursor]
+            flag_line = re.match(r"^([\w$]+) = false$", line)
+            if flag_line and (done_flag is None or flag_line.group(1) == done_flag):
+                seen_flag = flag_line.group(1)
+                cursor += 1
+                continue
+            break
+    else:
+        taken_index = cursor - 1
+        taken_end = _find_block_end(pull, taken_index)
+        if taken_end is None:
+            return None
+        arm = [line.strip() for line in pull[taken_index + 1 : taken_end]]
+        value_store = (
+            re.match(rf"^([\w$]+) = {re.escape(subject)}\.value$", arm[0]) if arm else None
+        )
+        if not value_store:
+            return None
+        target = value_store.group(1)
+        cursor = taken_end + 1
+        while cursor < len(pull):
+            line = pull[cursor]
+            flag_line = re.match(r"^([\w$]+) = false$", line)
+            if flag_line and (done_flag is None or flag_line.group(1) == done_flag):
+                seen_flag = flag_line.group(1)
+                cursor += 1
+                continue
+            rest.append(line.strip())
+            cursor += 1
+        rest = [
+            line
+            for line in rest
+            if line != f"{target} = {subject}"
+        ]
+
+    has_fallback = cursor < len(pull) and pull[cursor].strip() == "else {"
+    if has_fallback:
+        else_end = _find_block_end(pull, cursor)
+        if else_end is None:
+            return None
+        if [line.strip() for line in pull[cursor + 1 : else_end]] != [f"{target} = undefined"]:
+            return None
+        cursor = else_end + 1
+        trailing_else = _parse_undefined_else(pull, cursor, target)
+        if trailing_else is not None:
+            cursor = trailing_else
+    if cursor != len(pull):
+        return None
+    if done_flag is not None and seen_flag != done_flag:
+        return None
+    return tail_index, target, seen_flag
+
+
+def _parse_explicit_destructuring(
+    body: List[str], index: int, iterator: str
+) -> Optional[Tuple[int, str, str]]:
+    """Parse V8's two-pull array-destructuring over `iterator` ([k, v])."""
+    if index >= len(body):
+        return None
+    cursor = index
+    # The done flag may be pre-initialized before the first pull or only
+    # set inside it; in the latter case the first pull names it.
+    probe = _parse_explicit_pair_pull(body, cursor, iterator, None)
+    if probe is None:
+        flag_store = re.match(r"^([\w$]+) = false$", body[cursor].strip())
+        if not flag_store:
+            return None
+        done_flag = flag_store.group(1)
+        cursor += 1
+        first = _parse_explicit_pair_pull(body, cursor, iterator, done_flag)
+        if first is None:
+            return None
+        cursor, first_target, _ = first
+    else:
+        cursor, first_target, done_flag = probe
+    # The whole conditional pull may carry an outer `else` re-storing the
+    # undefined fallback; both arms converge on the same register.
+    outer_else = _parse_undefined_else(body, cursor, first_target)
+    if outer_else is not None:
+        cursor = outer_else
+    key_store = re.match(r"^([\w$]+) = " + re.escape(first_target) + r"$", body[cursor].strip())
+    if not key_store:
+        return None
+    key_reg = key_store.group(1)
+    cursor += 1
+    if cursor >= len(body) or body[cursor].strip() != f"if (!({done_flag})) {{":
+        return None
+    second_end = _find_block_end(body, cursor)
+    if second_end is None:
+        return None
+    second_block = [line.strip() for line in body[cursor + 1 : second_end]]
+    expected_head = f"{done_flag} = true"
+    if not second_block or second_block[0] != expected_head:
+        return None
+    # sb[1:] is the nested conditional pull, already self-balanced.
+    second = _parse_explicit_pair_pull(second_block[1:], 0, iterator, done_flag)
+    if second is None:
+        return None
+    _, second_target, _ = second
+    cursor = second_end + 1
+    outer_else = _parse_undefined_else(body, cursor, second_target)
+    if outer_else is not None:
+        cursor = outer_else
+    if cursor >= len(body):
+        return None
+    value_store = re.match(r"^([\w$]+) = " + re.escape(second_target) + r"$", body[cursor].strip())
+    if not value_store:
+        return None
+    value_reg = value_store.group(1)
+    cursor += 1
+    # The IteratorClose may sit directly here or after status-sentinel
+    # stores emitted between the destructuring and the close.
+    close = _parse_iterator_close_if(body, cursor, done_flag, iterator)
+    while close is None and cursor < len(body):
+        stripped = body[cursor].strip()
+        if not re.match(r"^[\w$]+ = (-?\d+|undefined)$", stripped):
+            break
+        cursor += 1
+        close = _parse_iterator_close_if(body, cursor, done_flag, iterator)
+    if close is None:
+        return None
+    return close, key_reg, value_reg
+
+
+def _parse_undefined_else(
+    body: List[str], index: int, target: str
+) -> Optional[int]:
+    """Match `else { target = undefined }`; return the line after it."""
+    if index >= len(body) or body[index].strip() != "else {":
+        return None
+    end = _find_block_end(body, index)
+    if end is None:
+        return None
+    if [line.strip() for line in body[index + 1 : end]] != [f"{target} = undefined"]:
+        return None
+    return end + 1
+
+
+def _parse_iterator_close_if(
+    body: List[str], index: int, condition: str, iterator: str
+) -> Optional[int]:
+    """Parse `if (!(cond)) { iterator.return ... }`; return the line after."""
+    if index >= len(body) or body[index].strip() != f"if (!({condition})) {{":
+        return None
+    end = _find_block_end(body, index)
+    if end is None:
+        return None
+    block = "\n".join(body[index : end + 1])
+    if f"{iterator}.return" not in block:
+        return None
+    if "TypeError" not in block and "isJSReceiver" not in block:
+        return None
+    return end + 1
+
+
+def _wrap_empty_else_body(
+    body: List[str], index: int
+) -> Tuple[Optional[int], List[str]]:
+    """Match `if (status === 0) {` (empty) whose else holds the live body."""
+    if index >= len(body):
+        return None, []
+    header = re.match(r"^if \(([\w$]+) === 0\) \{$", body[index].strip())
+    if not header:
+        return None, []
+    end = _find_block_end(body, index)
+    if end is None:
+        return None, []
+    inner = [line.strip() for line in body[index + 1 : end]]
+    if inner:
+        return None, []
+    if end + 1 >= len(body) or body[end + 1].strip() != "else {":
+        return None, []
+    else_end = _find_block_end(body, end + 1)
+    if else_end is None:
+        return None, []
+    return (
+        else_end,
+        [line.strip() for line in body[end + 2 : else_end]],
+    )
+
+
+def _parse_explicit_for_of_body(
+    body: List[str], iterator: str
+) -> Optional[Tuple[List[str], List[str], Optional[str], Optional[Tuple[str, str]]]]:
+    """Parse the residual explicit iterator loop left by level-4 output.
+
+    V8 reuses registers freely: the receiver guard may test the raw ``.next()``
+    result while ``done``/``value`` are read through a later alias. Accept any
+    consistent mix of the two registers. Returns
+    (live_body, item_alias_registers, done_flag, (key, value) regs).
+    """
+    cursor = 0
+    next_call = re.match(rf"^([\w$]+) = {re.escape(iterator)}\.next\(\)$", body[0].strip())
+    if not next_call:
+        return None
+    result_reg = next_call.group(1)
+    cursor = 1
+
+    alias: Optional[str] = None
+    alias_match = re.match(rf"^([\w$]+) = {result_reg}$", body[cursor].strip())
+    if alias_match:
+        alias = alias_match.group(1)
+        cursor += 1
+    # The receiver guard may test either register regardless of the copy
+    # order between the raw result and its alias.
+    subjects = (alias, result_reg) if alias else (result_reg,)
+    for subject in subjects:
+        guard = _skip_jsreceiver_guard(body, cursor, subject)
+        if guard is not None:
+            break
+    if guard is None:
+        return None
+    cursor = guard
+    cursor = guard
+
+    def done_subject() -> Optional[str]:
+        for candidate in (alias, result_reg):
+            if candidate and re.match(
+                rf"^[\w$]+ = {re.escape(candidate)}\.done$",
+                body[cursor].strip(),
+            ):
+                return candidate
+        return None
+
+    subject = done_subject()
+    if subject is None:
+        return None
+    done_store = re.match(rf"^[\w$]+ = {re.escape(subject)}\.done$", body[cursor].strip())
+    if done_store:
+        cursor += 1
+    if cursor >= len(body) or body[cursor].strip() != f"if ({subject}.done) {{":
+        return None
+    break_end = _find_block_end(body, cursor)
+    if break_end is None:
+        return None
+    if [line.strip() for line in body[cursor + 1 : break_end]] != ["break"]:
+        return None
+    cursor = break_end + 1
+    value_store = re.match(rf"^([\w$]+) = {re.escape(subject)}\.value$", body[cursor].strip())
+    if not value_store:
+        return None
+    value_holder = value_store.group(1)
+    cursor += 1
+    flag_reg: Optional[str] = None
+    flag_store = re.match(r"^([\w$]+) = false$", body[cursor].strip())
+    if flag_store:
+        flag_reg = flag_store.group(1)
+        cursor += 1
+
+    pair: Optional[Tuple[str, str]] = None
+    inner_setup = re.match(
+        rf"^([\w$]+) = {re.escape(value_holder)}\[Symbol\.iterator\]\(\)$",
+        body[cursor].strip(),
+    ) if cursor < len(body) else None
+    if inner_setup:
+        inner_tmp = inner_setup.group(1)
+        guard_at = _skip_jsreceiver_guard(body, cursor + 1, inner_tmp)
+        if guard_at is None:
+            return None
+        inner_store = re.match(
+            rf"^([\w$]+) = {inner_tmp}$", body[guard_at].strip()
+        )
+        if not inner_store:
+            return None
+        inner = inner_store.group(1)
+        parsed = _parse_explicit_destructuring(body, guard_at + 1, inner)
+        if parsed is None:
+            return None
+        cursor, key_reg, value_reg = parsed
+        pair = (key_reg, value_reg)
+
+    status_reg: Optional[str] = None
+    tail_status = re.match(r"^([\w$]+) = -1$", body[cursor].strip()) if cursor < len(body) else None
+    if tail_status:
+        status_reg = tail_status.group(1)
+        undefined_store = re.match(
+            rf"^([\w$]+) = {re.escape(status_reg)}$", body[cursor + 1].strip()
+        ) if cursor + 1 < len(body) else None
+        undefined_reg = undefined_store.group(1) if undefined_store else None
+        close_at = cursor + (2 if undefined_reg else 1)
+        close = _parse_iterator_close_if(body, close_at, flag_reg, iterator)
+        if close is None:
+            return None
+        cursor = close
+        load_store = re.match(
+            rf"^[\w$]+ = {undefined_reg}$", body[cursor].strip()
+        ) if undefined_reg and cursor < len(body) else None
+        if load_store:
+            cursor += 1
+        wrapped_end, wrapped_body = _wrap_empty_else_body(body, cursor)
+        if wrapped_end is None or wrapped_end != len(body):
+            return None
+        return wrapped_body, [value_holder], flag_reg, pair
+
+    return body[cursor:], [value_holder], flag_reg, pair
+
+
+def _parse_explicit_outer_cleanup(
+    lines: List[str], start: int, iterator: str, flag_reg: Optional[str]
+) -> Optional[int]:
+    """Match the post-loop IteratorClose epilogue; return its last line."""
+    cursor = start
+    status_store = re.match(r"^([\w$]+) = -1$", lines[cursor].strip())
+    if not status_store:
+        return None
+    status_reg = status_store.group(1)
+    copy_store = re.match(rf"^([\w$]+) = {status_reg}$", lines[cursor + 1].strip())
+    if not copy_store:
+        return None
+    copy_reg = copy_store.group(1)
+    cursor += 2
+    undefined_store = re.match(r"^([\w$]+) = undefined$", lines[cursor].strip())
+    if not undefined_store:
+        return None
+    undefined_reg = undefined_store.group(1)
+    cursor += 1
+    if flag_reg is None:
+        return None
+    close = _parse_iterator_close_if(lines, cursor, flag_reg, iterator)
+    if close is None:
+        return None
+    cursor = close
+    if cursor < len(lines):
+        load_store = re.match(
+            rf"^[\w$]+ = {undefined_reg}$", lines[cursor].strip()
+        )
+        if load_store:
+            cursor += 1
+    if cursor >= len(lines):
+        return None
+    throw = re.match(rf"^if \({copy_reg} === 0\) \{{$", lines[cursor].strip())
+    if not throw:
+        return None
+    throw_end = _find_block_end(lines, cursor)
+    if throw_end is None:
+        return None
+    block = "\n".join(lines[cursor : throw_end + 1])
+    if f"throw {status_reg}" not in block:
+        return None
+    return throw_end
+
+
+def _fresh_name(base: str, used: Iterable[str]) -> str:
+    name = base
+    suffix = 1
+    while name in used:
+        name = f"{base}{suffix}"
+        suffix += 1
+    return name
+
+
+def _recover_explicit_for_of(lines: List[str]) -> List[str]:
+    """Fold the explicit iterator-protocol loop into `for (const x of src)`.
+
+    Level-4 output can leave the full protocol expansion (manual
+    ``[Symbol.iterator]()``, ``.next()``/``done`` plumbing, duplicated
+    IteratorResult guards, paired destructuring, IteratorClose sentinels).
+    Requiring every structural piece keeps the rewrite tied to bytecode
+    evidence; anything that deviates is left untouched.
+    """
+    for setup_start, line in enumerate(lines):
+        setup = re.match(r"^([\w$]+) = (.+)\[Symbol\.iterator\]\(\)$", line.strip())
+        if not setup:
+            continue
+        tmp, source = setup.groups()
+        # The GetIterator result may be stored through a receiver guard block,
+        # directly on the next line, or simply used as-is (earlier cleanup
+        # passes fold the guard away). All three carry the same bytecode
+        # evidence: the [Symbol.iterator]() call itself.
+        guard_at = _skip_jsreceiver_guard(lines, setup_start + 1, tmp)
+        start_after_setup = guard_at if guard_at is not None else setup_start + 1
+        iter_store = re.match(
+            rf"^([\w$]+) = {re.escape(tmp)}$", lines[start_after_setup].strip()
+        )
+        if iter_store:
+            iterator = iter_store.group(1)
+            cursor = start_after_setup + 1
+        else:
+            iterator = tmp
+            cursor = start_after_setup
+        flag_store = re.match(r"^([\w$]+) = false$", lines[cursor].strip())
+        flag_reg = flag_store.group(1) if flag_store else None
+        if flag_store:
+            cursor += 1
+        if lines[cursor].strip() != "for (;;) {":
+            continue
+        loop_end = _find_block_end(lines, cursor)
+        if loop_end is None:
+            continue
+        body = [item.strip() for item in lines[cursor + 1 : loop_end]]
+        parsed = _parse_explicit_for_of_body(body, iterator)
+        if parsed is None:
+            continue
+        live_body, aliases, body_flag, pair = parsed
+        if flag_reg is None:
+            flag_reg = body_flag
+        cleanup_end = (
+            _parse_explicit_outer_cleanup(lines, loop_end + 1, iterator, flag_reg)
+            if flag_reg
+            else None
+        )
+
+        # The status-sentinel plumbing (`X = status; if (status === 0) {}`)
+        # is dead scaffolding once the loop folds; drop the empty if/else
+        # wrapper and the load of the undefined sentinel register.
+        cleaned: List[str] = []
+        index = 0
+        while index < len(live_body):
+            line = live_body[index]
+            sentinel_load = re.match(r"^[\w$]+ = [\w$]+$", line.strip())
+            if (
+                sentinel_load
+                and index + 1 < len(live_body)
+                and re.match(r"^if \([\w$]+ === 0\) \{$", live_body[index + 1].strip())
+            ):
+                header_index = index + 1
+                header_end = _find_block_end(live_body, header_index)
+                if header_end is not None and header_end + 1 < len(live_body) \
+                        and live_body[header_end + 1].strip() == "else {":
+                    else_end = _find_block_end(live_body, header_end + 1)
+                    if else_end is not None:
+                        cleaned.extend(live_body[header_end + 2 : else_end])
+                        index = else_end + 1
+                        continue
+            cleaned.append(line)
+            index += 1
+        live_body = cleaned
+
+        used = set(re.findall(r"\b[A-Za-z_$][\w$]*\b", "\n".join(live_body)))
+        used |= set(re.findall(r"\b[A-Za-z_$][\w$]*\b", source))
+        if pair:
+            first = _fresh_name("key", used)
+            second = _fresh_name("value", used | {first})
+            binding = f"[{first}, {second}]"
+        else:
+            first = _fresh_name("item", used)
+            second = None
+            binding = first
+        for alias in aliases:
+            live_body = [
+                re.sub(rf"\b{re.escape(alias)}\b", first, item)
+                for item in live_body
+            ]
+        if pair:
+            key_reg, value_reg = pair
+            live_body = [
+                re.sub(rf"\b{re.escape(key_reg)}\b", first, item)
+                for item in live_body
+            ]
+            live_body = [
+                re.sub(rf"\b{re.escape(value_reg)}\b", second, item)
+                for item in live_body
+            ]
+
+        indent = _extract_indent(lines[setup_start])
+        replacement = [f"{indent}for (const {binding} of {source}) {{"]
+        replacement.extend(f"{indent}  {item}" for item in live_body)
+        replacement.append(f"{indent}}}")
+        tail_start = (cleanup_end + 1) if cleanup_end is not None else (loop_end + 1)
+        return lines[:setup_start] + replacement + lines[tail_start:]
+    return lines
+
+
+
+    """Recover the V8 10.x iterator skeleton after level-3 propagation.
+
+    In this form GetIterator is stored through ACCU, while the cached `next`
+    method and each iterator result are emitted as duplicated ACCU/register
+    expressions.  Requiring the complete setup, `done` guard, and canonical
+    IteratorClose tail keeps this rewrite tied to bytecode evidence.
+    """
+    for setup_start, line in enumerate(lines):
+        stripped = line.strip()
+        source = _direct_iterator_source(stripped)
+        if source is None:
+            continue
+
+        cursor = setup_start + 1
+        if cursor < len(lines) and lines[cursor].strip() == "if (!(isJSReceiver(ACCU))) {":
+            guard_end = _find_block_end(lines, cursor)
+            if guard_end is None:
+                continue
+            guard_text = "\n".join(lines[cursor : guard_end + 1])
+            if (
+                "ThrowSymbolIteratorInvalid" not in guard_text
+                and "throw new TypeError()" not in guard_text
+            ):
+                continue
+            cursor = guard_end + 1
+
+        if cursor >= len(lines):
+            continue
+        iterator_store = re.match(r"^(r\d+) = ACCU$", lines[cursor].strip())
+        if not iterator_store:
+            continue
+        iter_reg = iterator_store.group(1)
+        cursor += 1
+
+        next_reg: Optional[str] = None
+        if cursor + 1 < len(lines) and lines[cursor].strip() == f"ACCU = {iter_reg}.next":
+            next_line = lines[cursor + 1].strip()
+            next_store = re.match(
+                rf"^(r\d+) = {re.escape(iter_reg)}\.next$",
+                next_line,
+            ) or re.match(r"^(r\d+) = ACCU$", next_line)
+            if not next_store:
+                continue
+            next_reg = next_store.group(1)
+            cursor += 2
+
+        while_idx = None
+        bottom_tested = False
+        for candidate in range(cursor, min(cursor + 10, len(lines))):
+            stripped_header = lines[candidate].strip()
+            if stripped_header == "while (!(truthy(ACCU))) {":
+                while_idx = candidate
+                break
+            # Async functions keep V8's bottom-tested loop shape: the exit
+            # test stays mid-body as `if (truthy(X.done)) { break }`.
+            if stripped_header == "while (true) {":
+                while_idx = candidate
+                bottom_tested = True
+                break
+        if while_idx is None:
+            continue
+        while_end = _find_block_end(lines, while_idx)
+        if while_end is None:
+            continue
+
+        state_lines = [item.strip() for item in lines[cursor:while_idx]]
+        flag_match = next(
+            (
+                re.match(r"^(r\d+) = false$", item)
+                for item in state_lines
+                if re.match(r"^r\d+ = false$", item)
+            ),
+            None,
+        )
+        flag_reg = flag_match.group(1) if flag_match else None
+
+        parsed_body = _parse_direct_for_of_body(
+            lines,
+            while_idx,
+            while_end,
+            iter_reg,
+            next_reg,
+            flag_reg,
+            bottom_tested,
         )
         if parsed_body is None:
             continue
@@ -601,8 +1362,18 @@ def _parse_direct_for_of_body(
     iter_reg: str,
     next_reg: Optional[str],
     flag_reg: Optional[str],
+    bottom_tested: bool = False,
 ) -> Optional[Tuple[List[str], set[str], str]]:
     body_start = while_idx + 1
+    skip = 0
+    if bottom_tested:
+        # The resume bookkeeping (`rX = context`, `flag = true`) before the
+        # next() call belongs to V8's suspend/resume plumbing.
+        while body_start + skip < min(body_start + 6, while_end) and re.match(
+            r"^[\w$]+ = (context|true)$", lines[body_start + skip].strip()
+        ):
+            skip += 1
+    body_start += skip
     result_reg: Optional[str] = None
     call_index: Optional[int] = None
     expected_call = (
@@ -611,16 +1382,30 @@ def _parse_direct_for_of_body(
         else f"{iter_reg}.next()"
     )
     for index in range(body_start, min(body_start + 12, while_end)):
-        match = re.match(r"^(r\d+) = (.+)$", lines[index].strip())
+        stripped = lines[index].strip()
+        match = re.match(r"^(r\d+) = (.+)$", stripped)
         if match and match.group(2) == expected_call:
             result_reg = match.group(1)
             call_index = index
+            break
+        # ACCU-threaded form: `ACCU = it.call(...)` immediately followed by
+        # `rX = ACCU` (the accumulator copy level-3 propagation may keep).
+        if (
+            stripped == f"ACCU = {expected_call}"
+            and index + 1 < while_end
+            and (store := re.match(r"^(r\d+) = ACCU$", lines[index + 1].strip()))
+        ):
+            result_reg = store.group(1)
+            call_index = index + 1
             break
     if result_reg is None or call_index is None:
         return None
 
     cursor = call_index + 1
-    if cursor < while_end and lines[cursor].strip() == "if (!(isJSReceiver(ACCU))) {":
+    guard_headers = {"if (!(isJSReceiver(ACCU))) {"}
+    if bottom_tested:
+        guard_headers.add(f"if (!(isJSReceiver({result_reg}))) {{")
+    if cursor < while_end and lines[cursor].strip() in guard_headers:
         guard_end = _find_block_end(lines, cursor)
         if guard_end is None or guard_end >= while_end:
             return None
@@ -634,29 +1419,134 @@ def _parse_direct_for_of_body(
 
     if cursor >= while_end:
         return None
+    done_positive = {
+        f"if (truthy({result_reg}.done)) {{" ,
+        f"if (({result_reg}.done)) {{",
+    }
     if lines[cursor].strip() == f"ACCU = {result_reg}.done":
         cursor += 1
-        if cursor >= while_end or lines[cursor].strip() not in {
+        if cursor >= while_end:
+            return None
+        header = lines[cursor].strip()
+        if bottom_tested and header in {
+            "if (truthy(ACCU)) {",
+            f"if (truthy({result_reg}.done)) {{",
+        }:
+            pass
+        elif not bottom_tested and header in {
             "if (!truthy(ACCU)) {",
             "if (!(truthy(ACCU))) {",
         }:
+            pass
+        else:
             return None
-    elif lines[cursor].strip() not in {
-        f"if (!truthy({result_reg}.done)) {{",
-        f"if (!(truthy({result_reg}.done))) {{",
-    }:
+    elif lines[cursor].strip() in (
+        {
+            f"if (!truthy({result_reg}.done)) {{",
+            f"if (!(truthy({result_reg}.done))) {{",
+        }
+        if not bottom_tested
+        else done_positive
+    ):
+        pass
+    else:
         return None
+
+    if bottom_tested:
+        # Positive exit branch: `if (truthy(...done)) { break }`. The live
+        # body continues after this block, not inside it.
+        break_block_end = _find_block_end(lines, cursor)
+        if break_block_end is None or break_block_end >= while_end:
+            return None
+        inner = [item.strip() for item in lines[cursor + 1 : break_block_end]]
+        if inner != ["break"]:
+            return None
+        cursor = break_block_end + 1
+        if cursor >= while_end:
+            return None
+
     value_block_end = _find_block_end(lines, cursor)
+    if bottom_tested:
+        # No value-block wrapper in this shape: the live body runs bare from
+        # the value load to the loop end.
+        if value_block_end is not None and value_block_end < while_end:
+            return None
+        value_body = [item.strip() for item in lines[cursor:while_end]]
+        direct_value = f"{result_reg} = {result_reg}.value"
+        accu_value = f"ACCU = {result_reg}.value"
+        if direct_value in value_body:
+            value_store = value_body.index(direct_value)
+        elif (
+            accu_value in value_body
+            and value_body.index(accu_value) + 1 < len(value_body)
+            and value_body[value_body.index(accu_value) + 1] == f"{result_reg} = ACCU"
+        ):
+            value_store = value_body.index(accu_value) + 1
+        else:
+            return None
+        return _finish_direct_for_of_body(
+            value_body[value_store + 1 :], result_reg, flag_reg
+        )
     if value_block_end is None or value_block_end > while_end:
         return None
 
     value_body = [item.strip() for item in lines[cursor + 1 : value_block_end]]
-    try:
-        value_store = value_body.index(f"{result_reg} = {result_reg}.value")
-    except ValueError:
+    direct_value = f"{result_reg} = {result_reg}.value"
+    accu_value = f"ACCU = {result_reg}.value"
+    if direct_value in value_body:
+        value_store = value_body.index(direct_value)
+    elif (
+        accu_value in value_body
+        and value_body.index(accu_value) + 1 < len(value_body)
+        and value_body[value_body.index(accu_value) + 1] == f"{result_reg} = ACCU"
+    ):
+        # ACCU-threaded pair: `ACCU = result.value` then `result = ACCU`.
+        value_store = value_body.index(accu_value) + 1
+    else:
         return None
-    body_cursor = value_store + 1
-    if body_cursor < len(value_body) and value_body[body_cursor] == "ACCU = false":
+    return _finish_direct_for_of_body(
+        value_body[value_store + 1 :], result_reg, flag_reg
+    )
+
+
+def _finish_direct_for_of_body(
+    tail: List[str], result_reg: str, flag_reg: Optional[str]
+) -> Optional[Tuple[List[str], set[str], str]]:
+    """Consume flag reset and result aliases after the value load."""
+    body_cursor = 0
+    if body_cursor < len(tail) and tail[body_cursor] in {
+        "ACCU = false",
+        f"{flag_reg} = false",
+    }:
+        body_cursor += 1
+    body_flag = (
+        re.match(r"^(r\d+) = false$", tail[body_cursor])
+        if body_cursor < len(tail)
+        else None
+    )
+    if body_flag:
+        if flag_reg is not None and body_flag.group(1) != flag_reg:
+            return None
+        flag_reg = body_flag.group(1)
+        body_cursor += 1
+    if flag_reg is None:
+        return None
+
+    aliases = {result_reg}
+    while body_cursor < len(tail):
+        alias = re.match(
+            rf"^(r\d+) = {re.escape(result_reg)}$", tail[body_cursor]
+        )
+        if not alias:
+            break
+        aliases.add(alias.group(1))
+        body_cursor += 1
+
+    return tail[body_cursor:], aliases, flag_reg
+    if body_cursor < len(value_body) and value_body[body_cursor] in {
+        "ACCU = false",
+        f"{flag_reg} = false",
+    }:
         body_cursor += 1
     body_flag = (
         re.match(r"^(r\d+) = false$", value_body[body_cursor])
@@ -766,17 +1656,16 @@ def _find_direct_for_of_cleanup(
             r"^\s*(r\d+) = (-?\d+)\s*$", prefix, re.MULTILINE
         )
     }
+
+    def sentinel_register(register: str) -> bool:
+        return not register.startswith("r") or status_values.get(register) == -1
+
+    # Direct form: `if (rX === 0) {` (optionally with a goto-only else).
     for index in range(close_end + 1, min(close_end + 16, len(lines))):
         guard = re.match(
             r"^if \((r\d+|-?\d+) === 0\) \{$", lines[index].strip()
         )
-        if not guard:
-            continue
-        sentinel = guard.group(1)
-        if sentinel.startswith("r"):
-            if status_values.get(sentinel) != -1:
-                continue
-        elif int(sentinel) != -1:
+        if not guard or not sentinel_register(guard.group(1)):
             continue
         end = _find_block_end(lines, index)
         if end is None:
@@ -806,6 +1695,23 @@ def _find_direct_for_of_cleanup(
                     continue
             final_end = else_end
         return final_end, None
+
+    # ACCU-threaded form after propagation: `ACCU = 0; ACCU = (rX === ACCU);
+    # if (truthy(ACCU)) { ACCU = rY; throw ACCU }`. The close epilogue ends
+    # before this resume-mode check.
+    window = "\n".join(lines[close_end + 1 : min(close_end + 16, len(lines))])
+    accu_guard = re.search(
+        r"^ACCU = 0$\n"
+        r"^ACCU = \(([\w$]+) === ACCU\)$\n"
+        r"^if \(truthy\(ACCU\)\) \{$\n"
+        r"(?:^[^\n]*$\n)*?"
+        r"^\s*throw ACCU$\n"
+        r"^\}",
+        window,
+        re.MULTILINE,
+    )
+    if accu_guard and sentinel_register(accu_guard.group(1)):
+        return close_end, None
     return None
 
 

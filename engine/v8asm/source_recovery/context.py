@@ -498,13 +498,6 @@ class DecompilerContext:
             raw_name = getattr(sfi, "raw_name", None)
         return js_binding_identifier(raw_name, f"fn_{sfi.address:012x}")
 
-    def get_raw_function_name(self, sfi: V8SharedFunctionInfo) -> Optional[str]:
-        if sfi.name:
-            ref = self.get_object(sfi.name.address)
-            if isinstance(ref, V8String):
-                return ref.value or None
-        return getattr(sfi, "raw_name", None)
-
     def constant_pool_entries(self, bytecode: V8BytecodeArray) -> List[ConstantPoolEntry]:
         pool = self.bytecode_constant_pools.get(bytecode.address)
         if not pool or not pool.elements:

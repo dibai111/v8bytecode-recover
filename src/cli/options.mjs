@@ -311,6 +311,5 @@ export {
   parseArguments,
   parseLanguage,
   positionalArgument,
-  supportedLanguages,
   usage,
 };

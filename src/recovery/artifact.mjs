@@ -69,8 +69,5 @@ export {
   createRecoveryArtifact,
   parseRecoveryArtifact,
   readRecoveryArtifact,
-  recoveryArtifactFormat,
-  recoveryArtifactKind,
-  legacyRecoveryArtifactKind,
   serializeRecoveryArtifact,
 };

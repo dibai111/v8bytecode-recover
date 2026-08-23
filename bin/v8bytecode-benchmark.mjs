@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { benchmark } from '../src/benchmark/runner.mjs';
-import { loadCorpusManifest } from '../src/benchmark/corpus.mjs';
+import { benchmark } from '../src/analysis/benchmark.mjs';
+import { loadCorpusManifest } from '../src/analysis/benchmark-corpus.mjs';
 import { argumentValue, commaSeparatedValues } from '../src/cli/options.mjs';
 
 function parseArguments(argv) {

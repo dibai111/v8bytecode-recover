@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
 from .binary import (
     _compact_adjacent_binary_temp_registers,
@@ -31,7 +31,7 @@ from .cleanup import (
     _simplify_accu_throw,
     _simplify_accu_return,
 )
-from .common import _extract_indent
+from .common import _extract_indent, _find_block_end
 from .iteration import (
     _avoid_for_of_loop_var_source_collision,
     _recover_array_spread_appends_until_stable,
@@ -73,8 +73,122 @@ from .switch import (
 )
 
 
+
+
+def recover_for_of_early_return(lines: List[str]) -> List[str]:
+    """Recover `return <expr>` from V8's for-of resume-mode dispatch.
+
+    A return inside for-of becomes: set flag=1, stash the value, join the
+    iterator-close epilogue, then switch(flag) { case 0: throw value;
+    case 1: return value }. Rewrite the arm that feeds the dispatch into a
+    real return and neutralize the flag plumbing before later cleanup passes
+    mistake its stores for dead scaffolding.
+    """
+    out = lines[:]
+    i = 0
+    while i < len(out):
+        m_if = re.match(
+            r"^(\s*)if \((truthy\(ACCU\)|!\(truthy\(ACCU\)\))\) \{$", out[i]
+        )
+        if not m_if:
+            i += 1
+            continue
+        end = _find_block_end(out, i)
+        if end is None:
+            i += 1
+            continue
+        then_body = out[i + 1 : end]
+
+        # Scan the arm for a flag register assigned 1 (possibly via ACCU) and
+        # exactly one other register holding the returned expression.
+        pending_literal: Optional[int] = None
+        regs_literal: Dict[str, int] = {}
+        regs_expr: List[Tuple[str, str]] = []
+        for raw in then_body:
+            s = raw.strip()
+            accu_lit = re.match(r"^ACCU = (-?\d+)$", s)
+            if accu_lit:
+                pending_literal = int(accu_lit.group(1))
+                continue
+            reg_accu = re.match(r"^(r\d+) = ACCU$", s)
+            if reg_accu:
+                if pending_literal is not None:
+                    regs_literal[reg_accu.group(1)] = pending_literal
+                    pending_literal = None
+                continue
+            reg_lit = re.match(r"^(r\d+) = (-?\d+)$", s)
+            if reg_lit:
+                regs_literal[reg_lit.group(1)] = int(reg_lit.group(2))
+                continue
+            reg_expr = re.match(r"^(r\d+) = (.+)$", s)
+            if reg_expr:
+                regs_expr.append((reg_expr.group(1), reg_expr.group(2).strip()))
+
+        flags = [r for r, v in regs_literal.items() if v == 1]
+        if len(flags) != 1:
+            i += 1
+            continue
+        flag_reg = flags[0]
+        values = [(reg, expr) for reg, expr in regs_expr if reg != flag_reg]
+        if len(values) != 1 or "ACCU" in values[0][1]:
+            i += 1
+            continue
+        value_reg, value_expr = values[0]
+
+        # Find the dispatch on this flag after the enclosing block closes.
+        depth = 1
+        j = i + 1
+        while j < len(out) and depth > 0:
+            depth += out[j].count("{") - out[j].count("}")
+            j += 1
+        window = "\n".join(out[j : min(len(out), j + 60)])
+        dispatch = re.search(
+            rf"switch \({re.escape(flag_reg)}\) \{{\n"
+            rf"\s*case 0:\n\s*ACCU = (?P<v0>r\d+)\n\s*throw ACCU\n"
+            rf"\s*case 1:\n\s*ACCU = (?P<v1>r\d+)\n\s*return ACCU",
+            window,
+        )
+        import sys as _s; print('CAND', i, 'regs_expr=', regs_expr, 'flags=', flags, file=_s.stderr); print('DISPATCH CHECK', flag_reg, repr(value_reg), bool(dispatch), file=_s.stderr)
+        if not dispatch:
+            i += 1
+            continue
+        if dispatch.group("v0") != value_reg or dispatch.group("v1") != value_reg:
+            i += 1
+            continue
+
+        indent = m_if.group(1)
+        replacement = [
+            f"{indent}if ({m_if.group(2)}) {{",
+            f"{indent}  return {value_expr}",
+            f"{indent}}}",
+        ]
+        out[i : end + 1] = replacement
+
+        # Blank out the now-meaningless dispatch case bodies.
+        base = i + len(replacement)
+        k = base
+        while k + 2 < min(len(out), base + 60):
+            s = out[k].strip()
+            inner0 = out[k + 1].strip()
+            inner1 = out[k + 2].strip()
+            reg = re.match(r"ACCU = (r\d+)$", inner0)
+            if s.startswith("case ") and reg and (
+                inner1.startswith("throw") or inner1.startswith("return")
+            ):
+                indent_text = out[k][: len(out[k]) - len(s)]
+                out[k] = f"{indent_text}// resume-mode case removed"
+                out[k + 1] = ""
+                out[k + 2] = ""
+                k += 3
+                continue
+            k += 1
+        i += len(replacement)
+    return out
+
+
 def recover_js_structures(lines: List[str]) -> List[str]:
-    current = _recover_array_spread_appends_until_stable(lines)
+    current = recover_for_of_early_return(lines)
+    current = _recover_array_spread_appends_until_stable(current)
     current = _recover_post_decrement_loops(current)
     current = _recover_for_of_until_stable(current)
     current = _recover_array_destructuring_until_stable(current)

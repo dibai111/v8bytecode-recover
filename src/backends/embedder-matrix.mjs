@@ -62,4 +62,4 @@ function listEmbedders(engineRoot) {
     .map(([id, entry]) => ({ id, label: entry.label }));
 }
 
-export { assessEmbedderCompatibility, listEmbedders, loadEmbedderMatrix };
+export { assessEmbedderCompatibility, listEmbedders };

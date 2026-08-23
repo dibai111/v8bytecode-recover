@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAutoBackend } from '../src/backends/auto-backend.mjs';
+import { createAutoBackend } from '../src/backends/index.mjs';
 
 test('uses the profile backend when it succeeds', () => {
   let d8Calls = 0;

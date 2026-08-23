@@ -356,6 +356,5 @@ export {
   findVersionHashCandidates,
   rankVersionHashCandidates,
   findProfileForData,
-  profileHeaderLayout,
   readCachedDataHeader,
 };

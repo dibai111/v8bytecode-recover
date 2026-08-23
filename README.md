@@ -23,21 +23,21 @@ V8 cached bytecode（`.jsc` / `.v8blob`）通常不能直接閱讀，還原結�
 
 ~~~powershell
 cd D:\path\to\v8bytecode-recover
-.\v8bytecode-recover.ps1
+.\powershell\v8bytecode-recover.ps1
 ~~~
 
 選擇 **Quick recover**，輸入檔案或目錄，其他用自動預設。如果 Windows PowerShell 不允許執行 `.ps1`：
 
 ~~~powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\v8bytecode-recover.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\powershell\v8bytecode-recover.ps1
 ~~~
 
-主入口預設繁體中文；`.\v8bytecode-recover-zh-CN.ps1` 或 `-Language zh-CN` 使用簡體。
+主入口預設繁體中文；`.\powershell\v8bytecode-recover-zh-CN.ps1` 或 `-Language zh-CN` 使用簡體。
 
 Script、CI 或批次流程：
 
 ~~~powershell
-.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output
+.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output
 # 或直接使用 Node CLI
 node .\bin\v8bytecode-recover.mjs .\input -o .\output
 ~~~
@@ -76,13 +76,13 @@ input/           output/
 查看 blob header、V8 profile、snapshot 候選及 hash：
 
 ~~~powershell
-.\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
+.\powershell\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
 ~~~
 
 嚴格模式：任何 unresolved read-only reference 都不輸出 JavaScript：
 
 ~~~powershell
-.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Strict
+.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Strict
 ~~~
 
 輸出函式索引及 graph：
@@ -94,7 +94,7 @@ node .\bin\v8bytecode-recover.mjs .\input --emit functions,callgraph,tree,names
 大型目錄可使用 resume；輸入、設定或輸出被改動時，舊結果會自動失效：
 
 ~~~powershell
-.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Resume
+.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Resume
 ~~~
 
 如果目標 blob 仍有無法安全還原的 residue，研究模式保留候選檔於 `.research/`，不會把它誤標成 `.js`：
@@ -106,7 +106,7 @@ node .\bin\v8bytecode-recover.mjs .\input --research --report .\output\research.
 產生可重用 artifact，之後可在沒有 Python 或 d8 的情況下重播：
 
 ~~~powershell
-.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\artifacts -Emit serialized
+.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\artifacts -Emit serialized
 ~~~
 
 ### Matching d8 與 profiles
@@ -119,7 +119,7 @@ node .\bin\v8bytecode-recover.mjs .\input --research --report .\output\research.
 $env:V8BYTECODE_D8 = 'D:\tools\d8-14.7.exe'   # 指定本機 d8（可省略）
 node .\bin\v8bytecode-recover.mjs .\input\app.jsc
 # 或明確指定：
-.\v8bytecode-recover.ps1 -Action recover -InputPath .\input\app.jsc -Backend d8 -D8Path D:\path\to\d8.exe
+.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input\app.jsc -Backend d8 -D8Path D:\path\to\d8.exe
 ~~~
 
 由 upstream V8 tag 自動找出每條 minor line 的最新 exact tag，並生成候選 profiles：
@@ -142,10 +142,10 @@ node .\bin\v8bytecode-profiles.mjs generate --version 14.7.84
 ### 專案結構
 
 ~~~text
-v8bytecode-recover.ps1    PowerShell 主入口（預設繁體中文）
+powershell/v8bytecode-recover.ps1    PowerShell 主入口（預設繁體中文）
 powershell/               PowerShell actions、menu、localization、Node runner
 bin/                      recover、inspect、doctor、profiles、benchmark CLI
-src/                      CLI、pipeline、analysis、backends、validation 及 reporting
+src/                      流水線分層模組：cli/（選項與路徑）、backends/（d8 與 profile 後端）、recovery/（pipeline、artifact、報告）、analysis/（索引、轉換、benchmark）
 engine/v8asm/             V8 profiles、cached-data decoder、source recovery
 docs/                     profile 生成指南、命令例子及 benchmark 設定
 test/                     Node 內建測試
@@ -173,11 +173,11 @@ Compared with the View8-style tools it builds on, it adds output quality gates, 
 Requirements: Windows PowerShell, Node.js 18+, Python 3 for raw blobs. No runtime npm dependency.
 
 ~~~powershell
-.\v8bytecode-recover.ps1
+.\powershell\v8bytecode-recover.ps1
 node .\bin\v8bytecode-recover.mjs .\input -o .\output
 ~~~
 
-The PowerShell entry defaults to Traditional Chinese; use `v8bytecode-recover-zh-CN.ps1` or `-Language zh-CN` for Simplified. The inspect, doctor, and profile CLIs also accept `--language zh-TW|zh-CN`.
+The PowerShell entry defaults to Traditional Chinese; use `powershell/v8bytecode-recover-zh-CN.ps1` or `-Language zh-CN` for Simplified. The inspect, doctor, and profile CLIs also accept `--language zh-TW|zh-CN`.
 
 Inspect an input before recovery to see the detected header layout, hash candidates, snapshot candidates, and embedder evidence:
 

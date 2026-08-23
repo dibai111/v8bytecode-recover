@@ -21,7 +21,7 @@ The generated pack is written to `output/profiles/15.3.79/` and contains:
 Use the generated pack explicitly during recovery:
 
 ```powershell
-.\v8bytecode-recover.ps1 -Action recover `
+.\powershell\v8bytecode-recover.ps1 -Action recover `
   -InputPath .\input\app.jsc `
   -OutputPath .\output `
   -Profile 15.3.79 `

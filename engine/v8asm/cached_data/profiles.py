@@ -276,16 +276,6 @@ class ProfileSet:
             f"nearest profiles (not used): {choices}"
         )
 
-    def by_hash(self, value: int) -> Profile:
-        for profile in self.profiles:
-            if profile.version_hash == value:
-                return profile
-        versions = ", ".join(profile.version for profile in self.profiles)
-        raise ValueError(
-            f"unknown V8 version hash: 0x{value:08x}; profiles in {self.directory}: {versions}; "
-            "use --profile VERSION or --backend d8 --d8 PATH"
-        )
-
 
 def _default_profile_directory() -> Path:
     return Path(__file__).with_name("profiles").resolve()

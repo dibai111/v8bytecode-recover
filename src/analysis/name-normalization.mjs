@@ -32,4 +32,4 @@ function normalizeSourceNames(source) {
   };
 }
 
-export { addressFunctionPattern, normalizeSourceNames };
+export { normalizeSourceNames };

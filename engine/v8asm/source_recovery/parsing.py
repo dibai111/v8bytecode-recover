@@ -17,7 +17,6 @@ def parse_objects(lines: List[str]) -> List[V8HeapObject]:
         else:
             if not objs:
                 continue
-            # print(objects[-1],line.strip())
             objs[-1].add_line(line.strip("\n"))
     for obj in objs:
         obj.parse()
