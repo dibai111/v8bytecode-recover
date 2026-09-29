@@ -13,12 +13,13 @@ bytecode.
 ```
 
 Use `powershell/v8bytecode-recover-zh-CN.ps1` for simplified Chinese prompts, or add
-`-Language zh-CN` when calling the main script.
+`-Language zh-CN` when calling the main script. Use
+`powershell/v8bytecode-recover-en.ps1` for English prompts.
 
 ## Inspect before recovery
 
 ```powershell
-.\powershell\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
+.\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
 ```
 
 ## Generate an external profile pack
@@ -30,17 +31,20 @@ node .\bin\v8bytecode-profiles.mjs generate --version 15.3.79
 See [`PROFILE_GENERATION.md`](./PROFILE_GENERATION.md) for local V8 checkouts
 and bundled profile maintenance.
 
-## Matching d8 runtime slot
+## Matching d8 runtime
 
-Put a patched `d8.exe` (Windows) or `d8` (Linux/macOS) in `runtime/d8/`. The
-tool probes it for `loadjsc()` and selects it automatically when the profile
-backend cannot safely decode a blob.
+Put a patched `d8.exe` (Windows) or `d8` (Linux/macOS) in `runtime/d8/` to let
+the tool discover a local runtime. It probes the executable for `loadjsc()` and
+selects it automatically when the profile backend cannot safely decode a blob.
 
 The binary is intentionally not bundled because V8 d8 builds are large,
 platform-specific, and must match the producer's V8 tag. You can also set
 `V8BYTECODE_D8` or pass `--d8` when the runtime lives elsewhere. When no local
-d8 exists, recovery can auto-download the exact matching release build (see the
-README's auto-download section); `runtime/` is git-ignored.
+d8 exists, recovery can download and verify the exact matching release build.
+It is cached under `d8/VERSION/` in the current working directory; set
+`V8BYTECODE_CACHE_DIR` to choose another cache root. When launched through the
+PowerShell entry point, the project root is the working directory. Both
+`d8/` and `runtime/` are git-ignored.
 
 ## Resolve read-only heap values from a Node-produced blob
 

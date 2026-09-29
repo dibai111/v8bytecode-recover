@@ -68,6 +68,40 @@ test('emits source analysis and split functions for disassembled input', () => {
   }
 });
 
+test('rejects an empty recovery instead of publishing it as JavaScript', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-empty-pipeline-test-'));
+  const input = path.join(root, 'input');
+  const output = path.join(root, 'output');
+  fs.mkdirSync(input);
+  fs.writeFileSync(path.join(input, 'sample.disassembly.txt'), 'placeholder\n', 'utf8');
+
+  try {
+    const result = recoverSources({
+      input,
+      output,
+      inputFormat: 'disassembled',
+      backend: 'profile',
+      emit: [],
+      splitFunctions: null,
+      strict: false,
+      report: null,
+      python: 'missing-python',
+    }, { sourceRecoveryEntryPath }, {
+      decompile() {
+        return '';
+      },
+    });
+
+    assert.equal(result.emitted, 0);
+    assert.equal(result.failed, 1);
+    assert.match(result.files[0].error, /produced empty source/);
+    assert.equal(fs.existsSync(path.join(output, 'sample.js')), false);
+  } finally {
+    process.exitCode = undefined;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('reuses a serialized recovery artifact without invoking the backend', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'v8blob-artifact-pipeline-test-'));
   const input = path.join(root, 'input');

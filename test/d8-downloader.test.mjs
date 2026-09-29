@@ -18,7 +18,7 @@ test('computes V8 version hashes matching bundled profiles', async () => {
 
 test('returns null for non-integer or unknown version hashes', async () => {
   const result = await Promise.resolve(ensureMatchingD8({
-    projectRoot: '.',
+    cacheRoot: '.',
     versionHash: null,
   }));
   assert.equal(result, null);

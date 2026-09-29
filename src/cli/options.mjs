@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-const supportedLanguages = Object.freeze(['zh-TW', 'zh-CN']);
+const supportedLanguages = Object.freeze(['zh-TW', 'zh-CN', 'en']);
 
 function argumentValue(argv, index, option, { allowLeadingDash = false } = {}) {
   const value = argv[index + 1];
@@ -19,7 +19,7 @@ function commaSeparatedValues(value, option) {
 
 function parseLanguage(value, option = '--language') {
   if (!supportedLanguages.includes(value)) {
-    throw new Error(`${option} must be zh-TW or zh-CN`);
+    throw new Error(`${option} must be zh-TW, zh-CN, or en`);
   }
   return value;
 }

@@ -8,11 +8,21 @@ import { parseLanguage } from '../src/cli/options.mjs';
 import { inspectInput, renderInspection } from '../src/cli/inspect-input.mjs';
 import { listEmbedders } from '../src/backends/embedder-matrix.mjs';
 
-function usage() {
+function usage(language) {
+  if (language === 'en') {
+    console.log(`V8 Blob inspection
+
+Usage:
+  node bin/v8bytecode-inspect.mjs <blob-or-directory> [--profile-dir <dir>] [--embedder <name>] [--language zh-TW|zh-CN|en] [--json]
+
+Shows input size, SHA-256, V8 version hash, profile, cache header, payload,
+and nearby snapshots. Disassembly text and recovery artifacts are also supported.`);
+    return;
+  }
   console.log(`V8 Blob 診斷工具
 
 Usage:
-  node bin/v8bytecode-inspect.mjs <blob-or-directory> [--profile-dir <dir>] [--embedder <name>] [--language zh-TW|zh-CN] [--json]
+  node bin/v8bytecode-inspect.mjs <blob-or-directory> [--profile-dir <dir>] [--embedder <name>] [--language zh-TW|zh-CN|en] [--json]
 
 功能:
   顯示 raw blob 的大小、SHA-256、V8 version hash、內建 profile、header、payload
@@ -52,13 +62,17 @@ function parseArguments(argv) {
     else if (!argument.startsWith('-') && !options.input) options.input = path.resolve(argument);
     else throw new Error(`Unknown option: ${argument}`);
   }
-  if (!options.input && !options.help) throw new Error('請提供 .v8blob/.jsc 檔案或目錄');
+  if (!options.input && !options.help) {
+    throw new Error(options.language === 'en'
+      ? 'Provide a .v8blob/.jsc file or directory'
+      : '請提供 .v8blob/.jsc 檔案或目錄');
+  }
   return options;
 }
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArguments(argv);
-  if (options.help) return usage();
+  if (options.help) return usage(options.language);
   const items = inspectInput(
     options.input,
     engineRoot,

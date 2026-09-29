@@ -487,6 +487,9 @@ function recoverSources(options, paths, backend) {
           : { source: normalizedSource, mappings: [] };
         let source = normalization.source;
         researchSource = source;
+        if (!source.trim()) {
+          throw new Error('Decompiler produced empty source');
+        }
         let partialRecovery = null;
         let quality = qualityMetrics(source);
         if (!quality.residueFree && !options.strict && isReadOnlyOnlyResidue(quality)) {

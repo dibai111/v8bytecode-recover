@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseArguments } from '../src/cli/options.mjs';
+import { parseArguments, parseLanguage } from '../src/cli/options.mjs';
+
+test('accepts English for localized diagnostic output', () => {
+  assert.equal(parseLanguage('en'), 'en');
+});
 
 test('parses disassembled input and report options', () => {
   const options = parseArguments([

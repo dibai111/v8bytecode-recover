@@ -35,6 +35,12 @@ coverage is separated from decompiler quality:
 node .\bin\v8bytecode-profiles.mjs coverage --corpus D:\corpus\v8 --json
 ```
 
+The Node.js test suite creates a small real `.jsc` file with Node.js 22.18.0 and
+recovers it with the bundled V8 12.4.254.21 profile and the matching Node
+executable as its snapshot source. The generated input lives in a temporary
+directory and is deleted after the smoke run, so no proprietary or checked-in
+bytecode is needed.
+
 The adapter runs two commands per blob. `{input}` is the original blob,
 `{disassembly}` is the temporary text listing, `{output}` is the recovered
 JavaScript path, and `{root}` is the benchmark temporary root. Commands are

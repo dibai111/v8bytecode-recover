@@ -50,7 +50,7 @@ function parseArguments(argv) {
 }
 
 function usage() {
-  console.log('Usage: node bin/v8bytecode-doctor.mjs [--json] [--language zh-TW|zh-CN] [--python <exe>] [--d8 <path>] [--d8-dir <dir>] [--profile-dir <dir>]');
+  console.log('Usage: node bin/v8bytecode-doctor.mjs [--json] [--language zh-TW|zh-CN|en] [--python <exe>] [--d8 <path>] [--d8-dir <dir>] [--profile-dir <dir>]');
 }
 
 function main(argv = process.argv.slice(2)) {

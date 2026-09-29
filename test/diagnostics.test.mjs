@@ -29,4 +29,5 @@ test('renders optional d8 separately from the built-in recovery capabilities', (
   assert.match(output, /raw profile=OK/);
   assert.match(output, /patched d8=未配置/);
   assert.match(renderEnvironment(report, 'zh-CN'), /系统检查/);
+  assert.match(renderEnvironment(report, 'en'), /system check/);
 });

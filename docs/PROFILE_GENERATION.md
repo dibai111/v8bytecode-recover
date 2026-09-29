@@ -12,7 +12,8 @@ From the repository root:
 node .\bin\v8bytecode-profiles.mjs generate --version 15.3.79
 ```
 
-The generated pack is written to `output/profiles/15.3.79/` and contains:
+The generated pack is written to `output/profiles/15.3.79/` under the current
+working directory and contains:
 
 - `15.3.79.json`: the generated profile;
 - `index.json`: the pack index;
@@ -21,7 +22,7 @@ The generated pack is written to `output/profiles/15.3.79/` and contains:
 Use the generated pack explicitly during recovery:
 
 ```powershell
-.\powershell\v8bytecode-recover.ps1 -Action recover `
+.\v8bytecode-recover.ps1 -Action recover `
   -InputPath .\input\app.jsc `
   -OutputPath .\output `
   -Profile 15.3.79 `

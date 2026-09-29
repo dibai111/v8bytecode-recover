@@ -52,11 +52,36 @@ $script:V8Strings = @{
         Completed = '操作完成。'
         Finished = '操作完成，结束代码：{0}'
     }
+    'en' = @{
+        Title = 'v8bytecode-recover PowerShell'
+        QuickRecover = 'Quick recovery (automatic detection and defaults)'
+        Inspect = 'Inspect blob, V8 profile, and snapshot'
+        ExportAnalysis = 'Export an analysis artifact'
+        Profiles = 'List or validate built-in V8 profiles'
+        Benchmark = 'Compare backends'
+        Doctor = 'Check the environment'
+        Exit = 'Exit'
+        SelectFeature = 'Select an action'
+        InvalidSelection = 'Invalid selection.'
+        PressEnter = 'Press Enter to return to the menu'
+        InputPath = 'Enter a file or directory path'
+        PathMissing = 'Path not found. Try again.'
+        OutputPath = 'Output directory [press Enter for {0}]'
+        AnalysisOutput = 'Analysis output'
+        ProfileAction = 'Profile action'
+        ProfileVersion = 'V8 version [press Enter for all bundled profiles]'
+        ProfileOutput = 'Output directory [press Enter for {0}]'
+        Backends = 'Backends (profile or profile,d8) [default: profile]'
+        ChooseOne = 'Choose one of: {0}'
+        ChoiceHint = '{0} [{1}; default: {2}]'
+        Completed = 'Completed.'
+        Finished = 'Finished with exit code: {0}'
+    }
 }
 
 function Set-V8Language {
     param(
-        [ValidateSet('zh-TW', 'zh-CN')]
+        [ValidateSet('zh-TW', 'zh-CN', 'en')]
         [string]$Language = 'zh-TW'
     )
 

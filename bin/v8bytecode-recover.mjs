@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import { parseArguments, usage } from '../src/cli/options.mjs';
 import { createBackend } from '../src/backends/registry.mjs';
 import {
-  applicationRoot,
   defaultOutputPath,
   engineRoot,
   sourceRecoveryEntryPath,
@@ -47,7 +46,6 @@ function resolveDownloadedD8(options) {
   if (!versionHash) return null;
   process.stdout.write('No bundled profile for this V8 build; resolving matching d8 release...\n');
   return ensureMatchingD8({
-    projectRoot: applicationRoot,
     versionHash,
   });
 }

@@ -25,7 +25,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.18.0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,7 +35,7 @@ jobs:
       - name: Check JavaScript entry points
         run: npm run check
 
-      - name: Run Node.js tests
+      - name: Run Node.js tests and real-cache integration
         run: npm test
 
       - name: Run Python tests

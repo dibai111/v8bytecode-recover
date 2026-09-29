@@ -116,7 +116,7 @@ function Start-RecoverMenu {
         [Parameter(Mandatory = $true)]
         [string]$ProjectRoot,
 
-        [ValidateSet('zh-TW', 'zh-CN')]
+        [ValidateSet('zh-TW', 'zh-CN', 'en')]
         [string]$Language = 'zh-TW'
     )
 

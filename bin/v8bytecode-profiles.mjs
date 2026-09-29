@@ -21,7 +21,7 @@ function usageError() {
     'Usage: v8bytecode-profiles [list|validate|identify|coverage|generate|discover] [options]\n'
       + '  generate --version VERSION [--output-dir DIR] [--report FILE]\n'
       + '  discover [--all] [--output FILE] [--report FILE]\n'
-      + '  identify INPUT [--profile-dir DIR] [--language zh-TW|zh-CN] [--json]\n'
+      + '  identify INPUT [--profile-dir DIR] [--language zh-TW|zh-CN|en] [--json]\n'
       + '  coverage --corpus DIR [--profile-dir DIR] [--json]',
   );
 }
@@ -68,7 +68,7 @@ function defaultGeneratorDirectory(argumentsList) {
   if (optionValue(argumentsList, '--output-dir').length > 0) return null;
   const versions = optionValue(argumentsList, '--version');
   const suffix = versions.length === 1 ? versions[0] : 'generated';
-  return path.join(root, 'output', 'profiles', suffix);
+  return path.join(process.cwd(), 'output', 'profiles', suffix);
 }
 
 function generatorArguments() {

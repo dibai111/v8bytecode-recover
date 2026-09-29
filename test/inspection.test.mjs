@@ -31,6 +31,7 @@ test('inspects a legacy V8 cached-data header', () => {
     assert.equal(item.embedder.recommendedBackend, 'matching-d8');
     assert.match(renderInspection([item]), /V8 Blob/);
     assert.match(renderInspection([item], 'zh-CN'), /诊断结果/);
+    assert.match(renderInspection([item], 'en'), /V8 Blob inspection/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

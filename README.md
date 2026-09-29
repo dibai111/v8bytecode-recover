@@ -23,21 +23,21 @@ V8 cached bytecode（`.jsc` / `.v8blob`）通常不能直接閱讀，還原結�
 
 ~~~powershell
 cd D:\path\to\v8bytecode-recover
-.\powershell\v8bytecode-recover.ps1
+.\v8bytecode-recover.ps1
 ~~~
 
 選擇 **Quick recover**，輸入檔案或目錄，其他用自動預設。如果 Windows PowerShell 不允許執行 `.ps1`：
 
 ~~~powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\powershell\v8bytecode-recover.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\v8bytecode-recover.ps1
 ~~~
 
-主入口預設繁體中文；`.\powershell\v8bytecode-recover-zh-CN.ps1` 或 `-Language zh-CN` 使用簡體。
+主入口預設繁體中文；簡體版請執行 zh-CN 入口，英文版請執行 `powershell\v8bytecode-recover-en.ps1`；亦可傳入 `-Language zh-CN|en`。
 
 Script、CI 或批次流程：
 
 ~~~powershell
-.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output
 # 或直接使用 Node CLI
 node .\bin\v8bytecode-recover.mjs .\input -o .\output
 ~~~
@@ -76,13 +76,13 @@ input/           output/
 查看 blob header、V8 profile、snapshot 候選及 hash：
 
 ~~~powershell
-.\powershell\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
+.\v8bytecode-recover.ps1 -Action inspect -InputPath .\input\app.jsc
 ~~~
 
 嚴格模式：任何 unresolved read-only reference 都不輸出 JavaScript：
 
 ~~~powershell
-.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Strict
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Strict
 ~~~
 
 輸出函式索引及 graph：
@@ -94,7 +94,7 @@ node .\bin\v8bytecode-recover.mjs .\input --emit functions,callgraph,tree,names
 大型目錄可使用 resume；輸入、設定或輸出被改動時，舊結果會自動失效：
 
 ~~~powershell
-.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Resume
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\output -Resume
 ~~~
 
 如果目標 blob 仍有無法安全還原的 residue，研究模式保留候選檔於 `.research/`，不會把它誤標成 `.js`：
@@ -106,20 +106,20 @@ node .\bin\v8bytecode-recover.mjs .\input --research --report .\output\research.
 產生可重用 artifact，之後可在沒有 Python 或 d8 的情況下重播：
 
 ~~~powershell
-.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\artifacts -Emit serialized
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input -OutputPath .\artifacts -Emit serialized
 ~~~
 
 ### Matching d8 與 profiles
 
 - 內建 **130 個 exact profiles** 覆蓋 V8 5.1 至 15.3。`npm run profiles:list` 查看、`npm run profiles:validate` 驗證。
-- 目標 build 不在內建目錄時，工具由 blob 的 version hash 計算 V8 tag，**自動下載** matching patched d8（約 8 MB，放在 git-ignored 的 `runtime/d8/`，同一版本只下載一次）。`--no-d8-download` 停用。
+- 目標 build 不在內建目錄時，工具由 blob 的 version hash 計算 V8 tag，**自動下載** matching patched d8，並以 GitHub release 的 SHA-256 與檔案大小驗證後才解壓。執行檔預設放在目前工作目錄的 `d8/VERSION/`，同一版本只下載一次；可用 `V8BYTECODE_CACHE_DIR` 指定快取根目錄。`--no-d8-download` 停用。
 - Node、Electron、Chromium 及 custom embedder 的判定規則集中在 `engine/v8asm/cached_data/embedder-matrix.json`；對非 Node embedder，只有 version hash 不足以宣稱 exact，auto backend 會優先使用 matching d8。
 
 ~~~powershell
 $env:V8BYTECODE_D8 = 'D:\tools\d8-14.7.exe'   # 指定本機 d8（可省略）
 node .\bin\v8bytecode-recover.mjs .\input\app.jsc
 # 或明確指定：
-.\powershell\v8bytecode-recover.ps1 -Action recover -InputPath .\input\app.jsc -Backend d8 -D8Path D:\path\to\d8.exe
+.\v8bytecode-recover.ps1 -Action recover -InputPath .\input\app.jsc -Backend d8 -D8Path D:\path\to\d8.exe
 ~~~
 
 由 upstream V8 tag 自動找出每條 minor line 的最新 exact tag，並生成候選 profiles：
@@ -142,7 +142,7 @@ node .\bin\v8bytecode-profiles.mjs generate --version 14.7.84
 ### 專案結構
 
 ~~~text
-powershell/v8bytecode-recover.ps1    PowerShell 主入口（預設繁體中文）
+v8bytecode-recover.ps1    PowerShell 主入口（預設繁體中文）
 powershell/               PowerShell actions、menu、localization、Node runner
 bin/                      recover、inspect、doctor、profiles、benchmark CLI
 src/                      流水線分層模組：cli/（選項與路徑）、backends/（d8 與 profile 後端）、recovery/（pipeline、artifact、報告）、analysis/（索引、轉換、benchmark）
@@ -173,11 +173,11 @@ Compared with the View8-style tools it builds on, it adds output quality gates, 
 Requirements: Windows PowerShell, Node.js 18+, Python 3 for raw blobs. No runtime npm dependency.
 
 ~~~powershell
-.\powershell\v8bytecode-recover.ps1
+.\v8bytecode-recover.ps1
 node .\bin\v8bytecode-recover.mjs .\input -o .\output
 ~~~
 
-The PowerShell entry defaults to Traditional Chinese; use `powershell/v8bytecode-recover-zh-CN.ps1` or `-Language zh-CN` for Simplified. The inspect, doctor, and profile CLIs also accept `--language zh-TW|zh-CN`.
+The PowerShell entry defaults to Traditional Chinese; use `powershell/v8bytecode-recover-zh-CN.ps1` for Simplified Chinese or `powershell/v8bytecode-recover-en.ps1` for English. The inspect, doctor, and profile CLIs accept `--language zh-TW|zh-CN|en`.
 
 Inspect an input before recovery to see the detected header layout, hash candidates, snapshot candidates, and embedder evidence:
 
@@ -197,7 +197,7 @@ See [`docs/PROFILE_GENERATION.md`](./docs/PROFILE_GENERATION.md) for the mainten
 ### What makes it useful
 
 - Built-in profile backend for supported V8 cached-data formats; 130 exact profiles from V8 5.1 through 15.3.
-- Automatic d8 acquisition: the blob's version hash maps to its exact V8 tag and a matching patched release build downloads on demand (`--no-d8-download` disables).
+- Automatic d8 acquisition: the blob's version hash maps to its exact V8 tag, then the matching patched release is downloaded and checked against GitHub's SHA-256 digest and size before extraction. The executable is cached under `d8/VERSION/` in the current working directory; `V8BYTECODE_CACHE_DIR` overrides the cache root (`--no-d8-download` disables downloads).
 - Snapshot discovery for modern startup snapshots, legacy embedded Node snapshots, and read-only heaps inside Node/Electron binaries — including the running Node binary itself.
 - Quality gates that separate success, partial recovery, and failure; per-function decompiler failures keep commented linear output instead of discarding the file (`--strict` restores zero tolerance).
 - Recovery of switch statements from integer jump tables, handler-table try/catch, generators, and async functions.

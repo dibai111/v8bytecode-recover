@@ -112,6 +112,21 @@ const ENVIRONMENT_LABELS = Object.freeze({
     resultOk: '结果: 可以开始使用。',
     resultFail: '结果: 有项目需要处理，请先查看 FAIL 行。',
   },
+  en: {
+    title: 'v8bytecode-recover system check',
+    platform: 'Platform',
+    engine: 'Engine',
+    profilePack: 'Bundled',
+    externalProfilePack: 'Selected',
+    profiles: 'profiles',
+    pack: 'Profile pack',
+    optionalD8: 'not configured (optional)',
+    d8: 'd8',
+    loadjsc: 'loadjsc()',
+    capability: 'Capabilities',
+    resultOk: 'Result: ready to use.',
+    resultFail: 'Result: check the FAIL entries above.',
+  },
 });
 
 function renderEnvironment(report, language = 'zh-TW') {

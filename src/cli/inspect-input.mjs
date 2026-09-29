@@ -149,6 +149,27 @@ const INSPECTION_LABELS = Object.freeze({
     unindexed: '未索引',
     noSnapshot: '附近没有 matching snapshot',
   },
+  en: {
+    title: 'V8 Blob inspection',
+    format: 'Format',
+    size: 'Size',
+    versionHash: 'V8 version hash',
+    candidates: 'Header hash candidates',
+    bestCandidate: 'Best hash candidate',
+    profile: 'Detected profile',
+    profileMissing: 'not found; specify --profile or a matching d8',
+    profilePack: 'Profile pack',
+    profileMiss: 'no match',
+    compatibility: 'Embedder compatibility',
+    recommendation: 'Recommended backend',
+    missingEvidence: 'exact evidence is missing',
+    headerMissing: 'no exact profile; header cannot be safely decoded',
+    disassemblyLines: 'Disassembly lines',
+    valid: 'valid',
+    invalid: 'invalid',
+    unindexed: 'not indexed',
+    noSnapshot: 'no matching nearby snapshot',
+  },
 });
 
 function renderInspection(items, language = 'zh-TW') {

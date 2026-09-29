@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,8 +8,9 @@ import { spawnSync } from 'node:child_process';
 // so the blob hash maps directly to the release tag that can load it. Both
 // hash-combine orders (V8 era dependent) and 3/4-part versions are covered.
 const RELEASE_REPO = 'xqy2006/jsc2js';
-const CACHE_ROOT = 'runtime/d8';
+const CACHE_ROOT = 'd8';
 const VERSION_LIST_URL = `https://raw.githubusercontent.com/${RELEASE_REPO}/main/public/version.json`;
+const RELEASE_API_URL = `https://api.github.com/repos/${RELEASE_REPO}/releases/tags`;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
 
 const MASK_32 = 0xffffffffn;
@@ -53,16 +55,22 @@ function platformAssetName(version) {
   return null;
 }
 
-function cacheDirectory(projectRoot, version) {
-  return path.join(projectRoot, CACHE_ROOT, version);
+function runtimeCacheRoot() {
+  const configured = process.env.V8BYTECODE_CACHE_DIR?.trim();
+  if (configured) return path.resolve(configured);
+  return process.cwd();
+}
+
+function cacheDirectory(cacheRoot, version) {
+  return path.join(cacheRoot, CACHE_ROOT, version);
 }
 
 function executableName() {
   return process.platform === 'win32' ? 'd8.exe' : 'd8';
 }
 
-function cachedExecutablePath(projectRoot, version) {
-  const executable = path.join(cacheDirectory(projectRoot, version), executableName());
+function cachedExecutablePath(cacheRoot, version) {
+  const executable = path.join(cacheDirectory(cacheRoot, version), executableName());
   return fs.existsSync(executable) ? executable : null;
 }
 
@@ -72,8 +80,18 @@ function downloadFile(url, destination) {
       '-NoProfile', '-Command',
       `$ProgressPreference='SilentlyContinue'; `
         + `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; `
-        + `Invoke-WebRequest -Uri '${url}' -OutFile '${destination}'`,
-    ], { encoding: 'utf8', timeout: DOWNLOAD_TIMEOUT_MS, windowsHide: true });
+        + 'Invoke-WebRequest -Uri $env:V8BYTECODE_DOWNLOAD_URL '
+        + '-OutFile $env:V8BYTECODE_DOWNLOAD_DESTINATION',
+    ], {
+      encoding: 'utf8',
+      timeout: DOWNLOAD_TIMEOUT_MS,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        V8BYTECODE_DOWNLOAD_URL: url,
+        V8BYTECODE_DOWNLOAD_DESTINATION: destination,
+      },
+    });
     return result.status === 0 && fs.existsSync(destination)
       && fs.statSync(destination).size > 0;
   }
@@ -91,8 +109,18 @@ function extractArchive(archivePath, destination) {
     result = spawnSync('powershell.exe', [
       '-NoProfile', '-Command',
       `$ProgressPreference='SilentlyContinue'; `
-        + `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${destination}' -Force`,
-    ], { encoding: 'utf8', timeout: 120_000, windowsHide: true });
+        + 'Expand-Archive -LiteralPath $env:V8BYTECODE_ARCHIVE_PATH '
+        + '-DestinationPath $env:V8BYTECODE_EXTRACT_DIRECTORY -Force',
+    ], {
+      encoding: 'utf8',
+      timeout: 120_000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        V8BYTECODE_ARCHIVE_PATH: archivePath,
+        V8BYTECODE_EXTRACT_DIRECTORY: destination,
+      },
+    });
   } else {
     result = spawnSync('tar', ['-xzf', archivePath, '-C', destination], {
       encoding: 'utf8',
@@ -102,20 +130,64 @@ function extractArchive(archivePath, destination) {
   return result.status === 0;
 }
 
-function installRelease(projectRoot, version) {
+function fetchReleaseAsset(version, assetName) {
+  const url = `${RELEASE_API_URL}/${encodeURIComponent(version)}`;
+  const result = spawnSync('curl', [
+    '-fsSL',
+    '-H', 'Accept: application/vnd.github+json',
+    '-H', 'User-Agent: v8bytecode-recover',
+    url,
+  ], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    maxBuffer: 4 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) return null;
+  try {
+    const release = JSON.parse(result.stdout);
+    const asset = release.assets?.find((item) => item.name === assetName);
+    const digest = asset?.digest?.match(/^sha256:([\da-f]{64})$/i)?.[1];
+    if (!digest || !Number.isSafeInteger(asset.size) || asset.size <= 0) return null;
+    return { sha256: digest.toLowerCase(), size: asset.size };
+  } catch {
+    return null;
+  }
+}
+
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function installRelease(cacheRoot, version) {
   const assetName = platformAssetName(version);
   if (!assetName) return null;
-  const directory = cacheDirectory(projectRoot, version);
+  const asset = fetchReleaseAsset(version, assetName);
+  if (!asset) return null;
+
+  const directory = cacheDirectory(cacheRoot, version);
   fs.mkdirSync(directory, { recursive: true });
   const archivePath = path.join(directory, assetName);
   const url = `https://github.com/${RELEASE_REPO}/releases/download/${version}/${assetName}`;
   try {
     if (!downloadFile(url, archivePath)) return null;
+    const downloadedSize = fs.statSync(archivePath).size;
+    if (downloadedSize !== asset.size) {
+      throw new Error(
+        `Downloaded d8 archive has ${downloadedSize} bytes; expected ${asset.size}`,
+      );
+    }
+    const actualDigest = sha256File(archivePath);
+    if (actualDigest !== asset.sha256) {
+      throw new Error(
+        `SHA-256 mismatch for d8 ${version}: expected ${asset.sha256}, received ${actualDigest}`,
+      );
+    }
     if (!extractArchive(archivePath, directory)) return null;
   } finally {
     try { fs.rmSync(archivePath, { force: true }); } catch { /* ignore */ }
   }
-  return cachedExecutablePath(projectRoot, version);
+  return cachedExecutablePath(cacheRoot, version);
 }
 
 function fetchVersionList() {
@@ -139,15 +211,16 @@ function fetchVersionList() {
  * Resolve a raw V8 version hash to the release tag whose computed hash
  * matches, then ensure that patched d8 build is installed locally.
  */
-export function ensureMatchingD8({ projectRoot, versionHash }) {
+export function ensureMatchingD8({ cacheRoot, versionHash }) {
   if (!Number.isInteger(versionHash)) return null;
 
-  const memoPath = path.join(projectRoot, CACHE_ROOT, `${versionHash}.json`);
+  const resolvedCacheRoot = path.resolve(cacheRoot ?? runtimeCacheRoot());
+  const memoPath = path.join(resolvedCacheRoot, CACHE_ROOT, `${versionHash}.json`);
   try {
     const memo = JSON.parse(fs.readFileSync(memoPath, 'utf8'));
     if (memo?.version) {
-      return cachedExecutablePath(projectRoot, memo.version)
-        ?? installRelease(projectRoot, memo.version);
+      return cachedExecutablePath(resolvedCacheRoot, memo.version)
+        ?? installRelease(resolvedCacheRoot, memo.version);
     }
   } catch { /* no memo yet */ }
 
@@ -160,8 +233,8 @@ export function ensureMatchingD8({ projectRoot, versionHash }) {
         memoPath,
         `${JSON.stringify({ versionHash, version }, null, 2)}\n`,
       );
-      return cachedExecutablePath(projectRoot, version)
-        ?? installRelease(projectRoot, version);
+      return cachedExecutablePath(resolvedCacheRoot, version)
+        ?? installRelease(resolvedCacheRoot, version);
     }
   }
   return null;
