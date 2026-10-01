@@ -10,6 +10,6 @@ skills-lock.json
 .DS_Store
 Thumbs.db
 /runtime/
-/d8/
+/engine/d8/
 tools/d8/
 .runtime/

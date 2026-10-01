@@ -17,7 +17,7 @@ from .legacy_snapshot import (
     locate_legacy_snapshot,
     parse_legacy_snapshot,
 )
-from .profiles import Profile, ProfileSet, load_profiles
+from .profiles import Profile, ProfileSet, load_profiles_lazy
 from .object_stream import ObjectStreamParser, ParseError, Reference, SerializedObject
 from .snapshot import ReadOnlySnapshot
 
@@ -1609,7 +1609,7 @@ def disassemble_bytes(
     payload_offset: int | None = None,
     profile_directory: str | Path | None = None,
 ) -> str:
-    profiles = load_profiles(profile_directory)
+    profiles = load_profiles_lazy(profile_directory)
     if payload_offset is None:
         header, profile = parse_header(data, profiles, version)
         payload = data[header.header_size : header.header_size + header.payload_length]

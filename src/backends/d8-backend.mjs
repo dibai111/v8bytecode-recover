@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { runProcess, runPython } from './processes.mjs';
 import { discoverD8 } from './d8-discovery.mjs';
+import { createDisassemblyResult } from './protocol.mjs';
 
 function createD8Backend({ d8Path, d8Directory, engineRoot, python, projectRoot }) {
   const discovery = discoverD8({
@@ -31,14 +32,14 @@ function createD8Backend({ d8Path, d8Directory, engineRoot, python, projectRoot 
         );
       }
       const expression = `loadjsc(${JSON.stringify(path.resolve(blobPath))})`;
-      return {
-        backendId: 'd8',
+      return createDisassemblyResult({
+        backend: 'd8',
         d8Path: resolvedPath,
         d8Version: discovery.version,
         text: runProcess(resolvedPath, ['-e', expression], {
           cwd: path.dirname(resolvedPath),
         }),
-      };
+      });
     },
     decompile(disassemblyPath, level) {
       return runPython(

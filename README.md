@@ -32,7 +32,7 @@ cd D:\path\to\v8bytecode-recover
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\v8bytecode-recover.ps1
 ~~~
 
-主入口預設繁體中文；簡體版請執行 zh-CN 入口，英文版請執行 `powershell\v8bytecode-recover-en.ps1`；亦可傳入 `-Language zh-CN|en`。
+主入口預設繁體中文；可傳入 `-Language zh-CN|en` 選擇簡體中文或英文。
 
 Script、CI 或批次流程：
 
@@ -112,7 +112,7 @@ node .\bin\v8bytecode-recover.mjs .\input --research --report .\output\research.
 ### Matching d8 與 profiles
 
 - 內建 **130 個 exact profiles** 覆蓋 V8 5.1 至 15.3。`npm run profiles:list` 查看、`npm run profiles:validate` 驗證。
-- 目標 build 不在內建目錄時，工具由 blob 的 version hash 計算 V8 tag，**自動下載** matching patched d8，並以 GitHub release 的 SHA-256 與檔案大小驗證後才解壓。執行檔預設放在目前工作目錄的 `d8/VERSION/`，同一版本只下載一次；可用 `V8BYTECODE_CACHE_DIR` 指定快取根目錄。`--no-d8-download` 停用。
+- 目標 build 不在內建目錄時，工具由 blob 的 version hash 計算 V8 tag，**自動下載** matching patched d8，並以 GitHub release 的 SHA-256 與檔案大小驗證後才解壓。執行檔預設放在 `engine/d8/VERSION/`，同一版本只下載一次；可用 `V8BYTECODE_CACHE_DIR` 指定快取根目錄。`--no-d8-download` 停用。
 - Node、Electron、Chromium 及 custom embedder 的判定規則集中在 `engine/v8asm/cached_data/embedder-matrix.json`；對非 Node embedder，只有 version hash 不足以宣稱 exact，auto backend 會優先使用 matching d8。
 
 ~~~powershell
@@ -143,7 +143,7 @@ node .\bin\v8bytecode-profiles.mjs generate --version 14.7.84
 
 ~~~text
 v8bytecode-recover.ps1    PowerShell 主入口（預設繁體中文）
-powershell/               PowerShell actions、menu、localization、Node runner
+engine/menu/              PowerShell actions、menu、localization、Node runner
 bin/                      recover、inspect、doctor、profiles、benchmark CLI
 src/                      流水線分層模組：cli/（選項與路徑）、backends/（d8 與 profile 後端）、recovery/（pipeline、artifact、報告）、analysis/（索引、轉換、benchmark）
 engine/v8asm/             V8 profiles、cached-data decoder、source recovery
@@ -177,7 +177,7 @@ Requirements: Windows PowerShell, Node.js 18+, Python 3 for raw blobs. No runtim
 node .\bin\v8bytecode-recover.mjs .\input -o .\output
 ~~~
 
-The PowerShell entry defaults to Traditional Chinese; use `powershell/v8bytecode-recover-zh-CN.ps1` for Simplified Chinese or `powershell/v8bytecode-recover-en.ps1` for English. The inspect, doctor, and profile CLIs accept `--language zh-TW|zh-CN|en`.
+The root PowerShell entry defaults to Traditional Chinese and accepts `-Language zh-CN|en`. The inspect, doctor, and profile CLIs accept `--language zh-TW|zh-CN|en`.
 
 Inspect an input before recovery to see the detected header layout, hash candidates, snapshot candidates, and embedder evidence:
 
@@ -197,7 +197,7 @@ See [`docs/PROFILE_GENERATION.md`](./docs/PROFILE_GENERATION.md) for the mainten
 ### What makes it useful
 
 - Built-in profile backend for supported V8 cached-data formats; 130 exact profiles from V8 5.1 through 15.3.
-- Automatic d8 acquisition: the blob's version hash maps to its exact V8 tag, then the matching patched release is downloaded and checked against GitHub's SHA-256 digest and size before extraction. The executable is cached under `d8/VERSION/` in the current working directory; `V8BYTECODE_CACHE_DIR` overrides the cache root (`--no-d8-download` disables downloads).
+- Automatic d8 acquisition: the blob's version hash maps to its exact V8 tag, then the matching patched release is downloaded and checked against GitHub's SHA-256 digest and size before extraction. The executable is cached under `engine/d8/VERSION/`; `V8BYTECODE_CACHE_DIR` overrides the cache root (`--no-d8-download` disables downloads).
 - Snapshot discovery for modern startup snapshots, legacy embedded Node snapshots, and read-only heaps inside Node/Electron binaries — including the running Node binary itself.
 - Quality gates that separate success, partial recovery, and failure; per-function decompiler failures keep commented linear output instead of discarding the file (`--strict` restores zero tolerance).
 - Recovery of switch statements from integer jump tables, handler-table try/catch, generators, and async functions.

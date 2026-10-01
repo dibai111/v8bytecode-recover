@@ -276,6 +276,57 @@ class ProfileSet:
             f"nearest profiles (not used): {choices}"
         )
 
+    def by_hash(self, version_hash: int) -> Profile:
+        for profile in self.profiles:
+            if profile.version_hash == version_hash:
+                return profile
+        raise ValueError(
+            f"unknown V8 version hash 0x{version_hash:08x}; "
+            f"available versions: {', '.join(profile.version for profile in self.profiles)}"
+        )
+
+
+class LazyProfileSet:
+    """Profile catalog that reads the index first and profile JSON on demand."""
+
+    def __init__(self, directory: Path, index: dict) -> None:
+        self.directory = directory
+        self.format = index["format"]
+        self.versions = tuple(index["versions"])
+        encoding = index["operand_encoding"]
+        self.scalable_signed = frozenset(encoding["scalable_signed"])
+        self.scalable_unsigned = frozenset(encoding["scalable_unsigned"])
+        self.fixed_sizes = encoding["fixed_sizes"]
+        self._profiles: dict[str, Profile] = {}
+        self._hashes: dict[int, str] = {}
+
+    def _load(self, version: str) -> Profile:
+        clean = version.removesuffix("-electron.0").split("-", 1)[0]
+        if clean not in self.versions:
+            raise ValueError(f"unsupported V8 version: {version}; no exact profile in {self.directory}")
+        if clean not in self._profiles:
+            item = _read_json(self.directory / f"{clean}.json", f"profile {clean}")
+            self._profiles[clean] = _build_profile(cast(dict, item))
+            self._hashes[self._profiles[clean].version_hash] = clean
+        return self._profiles[clean]
+
+    def by_version(self, version: str) -> Profile:
+        return self._load(version)
+
+    def by_hash(self, version_hash: int) -> Profile:
+        version = self._hashes.get(version_hash)
+        if version is not None:
+            return self._profiles[version]
+        for candidate in self.versions:
+            profile = self._load(candidate)
+            if profile.version_hash == version_hash:
+                return profile
+        raise ValueError(f"unknown V8 version hash 0x{version_hash:08x}")
+
+    @property
+    def profiles(self) -> tuple[Profile, ...]:
+        return tuple(self._load(version) for version in self.versions)
+
 
 def _default_profile_directory() -> Path:
     return Path(__file__).with_name("profiles").resolve()
@@ -338,12 +389,22 @@ def read_profile_data(
     return raw, cast(list[dict], profile_data)
 
 
-@lru_cache(maxsize=8)
-def _load_profiles_cached(directory: str) -> ProfileSet:
-    profile_directory = Path(directory)
-    raw, profile_data = read_profile_data(profile_directory)
-    profiles = tuple(
-        Profile(
+def read_profile_index(directory: str | Path | None = None) -> dict:
+    """Read only the compact profile index without loading profile JSON files."""
+    profile_directory = _resolve_profile_directory(directory)
+    if not profile_directory.is_dir():
+        raise ValueError(f"profile directory does not exist: {profile_directory}")
+    raw = _read_json(profile_directory / "index.json", "profile index")
+    if not isinstance(raw, dict) or raw.get("format") != PROFILE_FORMAT_VERSION:
+        raise ValueError(f"invalid cached-data profile index: {profile_directory / 'index.json'}")
+    versions = raw.get("versions")
+    if not isinstance(versions, list) or not all(isinstance(version, str) for version in versions):
+        raise ValueError("profile index versions must be an array of strings")
+    return {**raw, "directory": profile_directory}
+
+
+def _build_profile(item: dict) -> Profile:
+    return Profile(
             version=item["version"],
             version_hash=item["version_hash"],
             register_file_start=item["register_file_start"],
@@ -403,8 +464,13 @@ def _load_profiles_cached(directory: str) -> ProfileSet:
             header_format=item.get("header_format"),
             cache_header_layout=item.get("cache_header_layout"),
         )
-        for item in profile_data
-    )
+
+
+@lru_cache(maxsize=8)
+def _load_profiles_cached(directory: str) -> ProfileSet:
+    profile_directory = Path(directory)
+    raw, profile_data = read_profile_data(profile_directory)
+    profiles = tuple(_build_profile(item) for item in profile_data)
     encoding = raw["operand_encoding"]
     return ProfileSet(
         profiles=profiles,
@@ -417,3 +483,14 @@ def _load_profiles_cached(directory: str) -> ProfileSet:
 
 def load_profiles(directory: str | Path | None = None) -> ProfileSet:
     return _load_profiles_cached(str(_resolve_profile_directory(directory)))
+
+
+@lru_cache(maxsize=8)
+def _load_profiles_lazy_cached(directory: str) -> LazyProfileSet:
+    profile_directory = Path(directory)
+    index = read_profile_index(profile_directory)
+    return LazyProfileSet(profile_directory, index)
+
+
+def load_profiles_lazy(directory: str | Path | None = None) -> LazyProfileSet:
+    return _load_profiles_lazy_cached(str(_resolve_profile_directory(directory)))

@@ -7,14 +7,13 @@ bytecode.
 ## Recover a directory
 
 ```powershell
-.\powershell\v8bytecode-recover-zh-TW.ps1 -Action recover `
+.\v8bytecode-recover.ps1 -Action recover `
   -InputPath .\input `
   -OutputPath .\output
 ```
 
-Use `powershell/v8bytecode-recover-zh-CN.ps1` for simplified Chinese prompts, or add
-`-Language zh-CN` when calling the main script. Use
-`powershell/v8bytecode-recover-en.ps1` for English prompts.
+Use `-Language zh-CN` for simplified Chinese prompts or `-Language en` for
+English prompts when calling the root script.
 
 ## Inspect before recovery
 
@@ -41,10 +40,10 @@ The binary is intentionally not bundled because V8 d8 builds are large,
 platform-specific, and must match the producer's V8 tag. You can also set
 `V8BYTECODE_D8` or pass `--d8` when the runtime lives elsewhere. When no local
 d8 exists, recovery can download and verify the exact matching release build.
-It is cached under `d8/VERSION/` in the current working directory; set
+It is cached under `engine/d8/VERSION/` in the current working directory; set
 `V8BYTECODE_CACHE_DIR` to choose another cache root. When launched through the
 PowerShell entry point, the project root is the working directory. Both
-`d8/` and `runtime/` are git-ignored.
+`engine/d8/` and `runtime/` are git-ignored.
 
 ## Resolve read-only heap values from a Node-produced blob
 

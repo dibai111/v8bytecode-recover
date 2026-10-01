@@ -13,6 +13,7 @@ from .model.bytecode import V8BytecodeArray
 
 from .context import DecompilerContext, JS_RESERVED_IDENTIFIERS, js_binding_identifier
 from .analysis.instruction import Instruction
+from .analysis.ir import build_function_ir
 from .parsing import parse_objects
 from .transforms.pipeline import simplify_lines
 from .transforms.file_cleanup import postprocess_level4_file
@@ -1062,6 +1063,8 @@ def render_level4(
     translator: InstructionTranslator,
     instructions: List[Instruction],
 ) -> List[str]:
+    ir = build_function_ir(instructions)
+    instructions = [item.instruction for item in ir.instructions]
     if translator.is_generator:
         instructions = _prepare_generator_instructions(translator, instructions)
     legacy_recovered = _render_simple_try_catch(

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 import { runPython } from './processes.mjs';
+import { createDisassemblyResult } from './protocol.mjs';
 
 function cachedDataArguments(blobPath, options, snapshotPath) {
   const args = ['-m', 'cached_data', blobPath];
@@ -21,14 +22,14 @@ function createProfileBackend({ engineRoot, python }) {
       snapshots: true,
     }),
     disassemble(blobPath, options, snapshotPath) {
-      return {
-        backendId: 'profile',
+      return createDisassemblyResult({
+        backend: 'profile',
         text: runPython(
         python,
         cachedDataArguments(blobPath, options, snapshotPath),
         engineRoot,
         ),
-      };
+      });
     },
     decompile(disassemblyPath, level) {
       return runPython(

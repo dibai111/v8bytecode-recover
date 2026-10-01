@@ -58,7 +58,7 @@ function platformAssetName(version) {
 function runtimeCacheRoot() {
   const configured = process.env.V8BYTECODE_CACHE_DIR?.trim();
   if (configured) return path.resolve(configured);
-  return process.cwd();
+  return path.join(process.cwd(), 'engine');
 }
 
 function cacheDirectory(cacheRoot, version) {

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('zh-TW', 'zh-CN', 'en')]
-    [string]$Language = 'zh-TW',
+    [string]$Language,
 
     [ValidateSet('menu', 'recover', 'inspect', 'disassemble', 'translated', 'cfg', 'functions', 'callgraph', 'tree', 'inline', 'names', 'profiles', 'benchmark', 'doctor')]
     [string]$Action = 'menu',
@@ -65,9 +65,36 @@ param(
     [string]$Embedder = 'unknown'
 )
 
+# Keep the first interactive prompt readable in Windows PowerShell 5.1.
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {
+    # PowerShell hosts without configurable console encodings can continue.
+}
+
+$languageWasSelected = $PSBoundParameters.ContainsKey('Language')
+
+if (-not $languageWasSelected -and $Action -eq 'menu' -and -not $InputPath) {
+    Write-Host 'Select language: 1=Traditional Chinese, 2=Simplified Chinese, 3=English' -ForegroundColor Cyan
+    do {
+        $languageChoice = (Read-Host 'Enter 1, 2, or 3').Trim()
+    } while ($languageChoice -notin @('1', '2', '3'))
+
+    $Language = @{
+        '1' = 'zh-TW'
+        '2' = 'zh-CN'
+        '3' = 'en'
+    }[$languageChoice]
+}
+
+if ([string]::IsNullOrWhiteSpace($Language)) {
+    $Language = 'zh-TW'
+}
+
 # The central entry point lives in the repository root.
 $projectRoot = $PSScriptRoot
-$scriptDir = Join-Path $PSScriptRoot 'powershell'
+$scriptDir = Join-Path $PSScriptRoot 'engine\menu'
 $callerPath = (Get-Location).Path
 Import-Module (Join-Path $scriptDir 'V8BytecodeRecover.Localization.psm1') -Force -ErrorAction Stop
 Set-V8Language -Language $Language

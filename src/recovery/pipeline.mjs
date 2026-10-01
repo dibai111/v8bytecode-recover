@@ -25,6 +25,7 @@ import {
 import { assertPythonAvailable, syntaxCheck } from '../backends/processes.mjs';
 import { nearbySnapshotCandidates } from '../backends/snapshot-discovery.mjs';
 import { describeResidue, qualityMetrics } from '../analysis/source-quality.mjs';
+import { normalizeDisassemblyResult } from '../backends/protocol.mjs';
 import {
   createRecoveryReport,
   sourceSummary,
@@ -82,13 +83,17 @@ function disassembleWithSnapshots(input, options, backend) {
 
   for (const snapshotPath of attempts) {
     try {
-      const result = backend.disassemble(input.path, options, snapshotPath);
+      const result = normalizeDisassemblyResult(
+        backend.disassemble(input.path, options, snapshotPath),
+        backend.id ?? 'unknown',
+      );
       return {
         source: result.text,
-        backendId: result.backendId,
+        backendId: result.backend,
         snapshotPath,
-        d8Path: result.d8Path ?? null,
-        d8Version: result.d8Version ?? null,
+        d8Path: result.d8Path,
+        d8Version: result.d8Version,
+        diagnostics: result.diagnostics,
         ...parseDisassemblyMetadata(result.text),
       };
     } catch (error) {
